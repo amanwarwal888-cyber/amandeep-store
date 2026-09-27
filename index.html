@@ -20,6 +20,7 @@
         <li><a href="privacy.html">Privacy Policy</a></li>
         <li><a href="terms.html">Terms</a></li>
         <li><a href="contact.html">Contact</a></li>
+        <li><a href="admin.html">Admin</a></li>
       </ul>
       <span id="account-area"></span>
     </div>
@@ -29,11 +30,12 @@
 <section class="hero">
   <div class="container">
     <h1>Browse our products</h1>
-    <p>Register with your email to request a purchase — an email link verifies you, no password needed.</p>
+    <p>Register with your name, email, and mobile number to request a purchase.</p>
   </div>
 </section>
 
 <main class="container">
+  <div id="orders-panel" style="display:none;"></div>
   <div id="product-grid" class="product-grid">
     <p style="grid-column: 1/-1; text-align:center; color:#5F6B7A;">Loading products…</p>
   </div>
@@ -43,13 +45,40 @@
   <div class="container">&copy; <span id="year"></span> Amandeep Singh. All rights reserved.</div>
 </footer>
 
-<!-- Sign-in / Register modal -->
+<!-- Register / Sign-in modal -->
 <div class="modal-overlay" id="auth-modal">
   <div class="modal">
     <button class="modal-close" id="auth-close">&times;</button>
 
-    <div id="auth-link-view">
-      <h2>Sign in to purchase</h2>
+    <div id="auth-register-view">
+      <h2>Register to purchase</h2>
+      <p style="font-size:.88rem;">Already registered? Just enter your email and password to sign in.</p>
+      <div class="field">
+        <label for="reg-name">Full name</label>
+        <input type="text" id="reg-name">
+      </div>
+      <div class="field">
+        <label for="reg-email">Email</label>
+        <input type="email" id="reg-email" placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="reg-mobile">Mobile number</label>
+        <input type="tel" id="reg-mobile" placeholder="10-digit mobile number">
+      </div>
+      <div class="field">
+        <label for="reg-password">Password</label>
+        <input type="password" id="reg-password" placeholder="At least 6 characters">
+      </div>
+      <button class="btn btn-primary btn-block" id="reg-continue-btn">Continue</button>
+      <div class="form-message" id="reg-message"></div>
+      <p style="font-size:.82rem; margin-top:14px; text-align:center;">
+        Prefer a one-time email link instead?
+        <a href="#" id="show-link-view">Use email link</a>
+      </p>
+    </div>
+
+    <div id="auth-link-view" style="display:none;">
+      <h2>Sign in with email link</h2>
       <p style="font-size:.88rem;">Enter your email — we'll send you a sign-in link. No password required.</p>
       <div class="field">
         <label for="auth-email">Email</label>
@@ -58,33 +87,14 @@
       <button class="btn btn-primary btn-block" id="send-link-btn">Send sign-in link</button>
       <div class="form-message" id="auth-message"></div>
       <p style="font-size:.82rem; margin-top:14px; text-align:center;">
-        Link not arriving, or getting a quota error?
-        <a href="#" id="show-password-view">Use email &amp; password instead</a>
-      </p>
-    </div>
-
-    <div id="auth-password-view" style="display:none;">
-      <h2>Sign in with password</h2>
-      <p style="font-size:.88rem;">First time here? Just enter an email and choose a password — an account is created automatically.</p>
-      <div class="field">
-        <label for="pw-email">Email</label>
-        <input type="email" id="pw-email" placeholder="you@example.com">
-      </div>
-      <div class="field">
-        <label for="pw-password">Password</label>
-        <input type="password" id="pw-password" placeholder="At least 6 characters">
-      </div>
-      <button class="btn btn-primary btn-block" id="pw-continue-btn">Continue</button>
-      <div class="form-message" id="pw-message"></div>
-      <p style="font-size:.82rem; margin-top:14px; text-align:center;">
-        <a href="#" id="show-link-view">&larr; Back to email link sign-in</a>
+        <a href="#" id="show-register-view">&larr; Back to registration</a>
       </p>
     </div>
 
   </div>
 </div>
 
-<!-- Complete profile modal (shown after clicking the email link, first time only) -->
+<!-- Complete profile modal (only used after the email-link path, which doesn't collect name/mobile) -->
 <div class="modal-overlay" id="profile-modal">
   <div class="modal">
     <h2>Complete your details</h2>
@@ -118,7 +128,7 @@
 
 <script type="module">
 import {
-  auth, db, collection, doc, addDoc, setDoc, getDoc, getDocs, query, orderBy,
+  auth, db, collection, doc, addDoc, setDoc, getDoc, getDocs, query, orderBy, where,
   serverTimestamp, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
   onAuthStateChanged, signOut,
   signInWithEmailAndPassword, createUserWithEmailAndPassword
@@ -130,6 +140,7 @@ const accountArea = document.getElementById('account-area');
 const authModal = document.getElementById('auth-modal');
 const profileModal = document.getElementById('profile-modal');
 const purchaseModal = document.getElementById('purchase-modal');
+const ordersPanel = document.getElementById('orders-panel');
 
 let currentUser = null;
 let currentProfile = null;
@@ -139,43 +150,66 @@ let purchaseTarget = null;
 function showModal(el) { el.classList.add('open'); }
 function hideModal(el) { el.classList.remove('open'); }
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
 document.getElementById('auth-close').onclick = () => hideModal(authModal);
 document.getElementById('purchase-close').onclick = () => hideModal(purchaseModal);
 
-// ---- Toggle between email-link view and password view ----
+// ---- Toggle between register view and email-link view ----
+const registerView = document.getElementById('auth-register-view');
 const linkView = document.getElementById('auth-link-view');
-const passwordView = document.getElementById('auth-password-view');
-document.getElementById('show-password-view').onclick = (e) => {
-  e.preventDefault();
-  linkView.style.display = 'none';
-  passwordView.style.display = 'block';
-};
 document.getElementById('show-link-view').onclick = (e) => {
   e.preventDefault();
-  passwordView.style.display = 'none';
+  registerView.style.display = 'none';
   linkView.style.display = 'block';
 };
+document.getElementById('show-register-view').onclick = (e) => {
+  e.preventDefault();
+  linkView.style.display = 'none';
+  registerView.style.display = 'block';
+};
 
-// ---- Password sign-in / auto sign-up fallback ----
-document.getElementById('pw-continue-btn').onclick = async () => {
-  const email = document.getElementById('pw-email').value.trim();
-  const password = document.getElementById('pw-password').value;
-  const msg = document.getElementById('pw-message');
+// ---- Combined register / sign-in (name, email, mobile, password) ----
+document.getElementById('reg-continue-btn').onclick = async () => {
+  const name = document.getElementById('reg-name').value.trim();
+  const email = document.getElementById('reg-email').value.trim();
+  const mobile = document.getElementById('reg-mobile').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const msg = document.getElementById('reg-message');
+
   if (!email || password.length < 6) {
     msg.textContent = 'Enter a valid email and a password of at least 6 characters.';
     msg.className = 'form-message visible error';
     return;
   }
+
   try {
+    let userCred;
+    let isNewUser = false;
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      userCred = await signInWithEmailAndPassword(auth, email, password);
     } catch (err) {
       if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        await createUserWithEmailAndPassword(auth, email, password);
+        if (!name || !mobile) {
+          msg.textContent = 'Please enter your name and mobile number to register.';
+          msg.className = 'form-message visible error';
+          return;
+        }
+        userCred = await createUserWithEmailAndPassword(auth, email, password);
+        isNewUser = true;
       } else {
         throw err;
       }
     }
+
+    if (isNewUser) {
+      await setDoc(doc(db, 'customers', userCred.user.uid), {
+        name, mobile, email, createdAt: serverTimestamp()
+      });
+    }
+
     msg.textContent = 'Signed in!';
     msg.className = 'form-message visible success';
   } catch (err) {
@@ -189,12 +223,12 @@ function renderAccountArea() {
   if (currentUser) {
     const name = currentProfile?.name || currentUser.email;
     accountArea.innerHTML = `
-      <span style="font-size:.88rem; margin-right:8px;">Hi, ${name.split(' ')[0]}</span>
+      <span style="font-size:.88rem; margin-right:8px;">Hi, ${escapeHtml(name.split(' ')[0])}</span>
       <button class="btn btn-outline btn-sm" id="signout-btn">Sign out</button>
     `;
     document.getElementById('signout-btn').onclick = () => signOut(auth);
   } else {
-    accountArea.innerHTML = `<button class="btn btn-primary btn-sm" id="signin-btn">Sign in</button>`;
+    accountArea.innerHTML = `<button class="btn btn-primary btn-sm" id="signin-btn">Register / Sign in</button>`;
     document.getElementById('signin-btn').onclick = () => showModal(authModal);
   }
 }
@@ -260,7 +294,36 @@ document.getElementById('save-profile-btn').onclick = async () => {
   currentProfile = { name, mobile, email: currentUser.email };
   hideModal(profileModal);
   renderAccountArea();
+  loadMyOrders();
 };
+
+// ---- My Orders panel (shows status, incl. confirmations) ----
+async function loadMyOrders() {
+  if (!currentUser) { ordersPanel.style.display = 'none'; return; }
+  const q = query(collection(db, 'orders'), where('customerUid', '==', currentUser.uid));
+  const snap = await getDocs(q);
+  if (snap.empty) { ordersPanel.style.display = 'none'; return; }
+
+  const orders = [];
+  snap.forEach(d => orders.push(d.data()));
+  orders.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+  const statusLabel = { pending: 'Pending', confirmed: 'Confirmed ✓', cancelled: 'Cancelled' };
+  const statusClass = { pending: 'pending', confirmed: 'confirmed', cancelled: 'cancelled' };
+
+  ordersPanel.style.display = 'block';
+  ordersPanel.innerHTML = `
+    <div class="card" style="margin-top:32px;">
+      <h3>Your purchase requests</h3>
+      ${orders.map(o => `
+        <div class="row-between" style="padding:8px 0; border-top:1px solid var(--divider);">
+          <span>${escapeHtml(o.productName)} <span style="color:#5F6B7A;">× ${o.quantity}</span></span>
+          <span class="status-pill ${statusClass[o.status] || 'pending'}">${statusLabel[o.status] || o.status}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
 
 // ---- Auth state ----
 onAuthStateChanged(auth, async (user) => {
@@ -268,8 +331,10 @@ onAuthStateChanged(auth, async (user) => {
   if (user) {
     hideModal(authModal);
     await loadProfile(user);
+    await loadMyOrders();
   } else {
     currentProfile = null;
+    ordersPanel.style.display = 'none';
   }
   renderAccountArea();
 });
@@ -302,10 +367,6 @@ async function loadProducts() {
   });
 }
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
-
 // ---- Purchase request flow ----
 function openPurchase(productId) {
   if (!currentUser || !currentProfile) {
@@ -336,7 +397,7 @@ document.getElementById('confirm-purchase-btn').onclick = async () => {
     });
     msg.textContent = 'Request sent! We will contact you to confirm.';
     msg.className = 'form-message visible success';
-    setTimeout(() => hideModal(purchaseModal), 1500);
+    setTimeout(() => { hideModal(purchaseModal); loadMyOrders(); }, 1500);
   } catch (err) {
     msg.textContent = err.message;
     msg.className = 'form-message visible error';
