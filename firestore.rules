@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email == 'amanwarwal888@gmail.com';
+    }
+
+    // Product catalog — anyone can read, only the admin can add/edit/delete
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Site content (contact details, privacy policy, terms) — public read, admin edit
+    match /site_content/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Customer records — a signed-in customer can create/read/update only their own record;
+    // the admin can read all of them
+    match /customers/{customerId} {
+      allow create: if request.auth != null && request.auth.uid == customerId;
+      allow read, update: if request.auth != null &&
+        (request.auth.uid == customerId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Purchase requests — a signed-in customer can create their own order and read it back;
+    // only the admin can read all orders or change their status
+    match /orders/{orderId} {
+      allow create: if request.auth != null
+        && request.resource.data.customerUid == request.auth.uid;
+      allow read: if request.auth != null &&
+        (resource.data.customerUid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+  }
+}

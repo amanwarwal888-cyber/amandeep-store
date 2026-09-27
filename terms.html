@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms &amp; Conditions — Store</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav container">
+    <a class="nav-brand" href="index.html"><span class="brand-mark">S</span>Store</a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="privacy.html">Privacy Policy</a></li>
+      <li><a href="terms.html">Terms</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main class="container" style="max-width:760px; padding:48px 24px 64px;">
+  <h1>Terms &amp; Conditions</h1>
+  <div id="terms-body" style="white-space:pre-wrap; color:#5F6B7A;">Loading…</div>
+</main>
+
+<footer class="site-footer"><div class="container">&copy; <span id="year"></span> Amandeep Singh. All rights reserved.</div></footer>
+
+<script type="module">
+import { db, doc, getDoc } from './firebase-init.js';
+document.getElementById('year').textContent = new Date().getFullYear();
+
+const DEFAULT_TEXT = `These Terms & Conditions govern your use of this store.
+
+By registering and requesting a purchase, you agree to provide accurate information and to be contacted regarding your request.
+
+A purchase request is not a confirmed order until we contact you to confirm availability and payment.
+
+We reserve the right to update these Terms at any time.
+
+Contact
+If you have questions about these Terms, use the Contact page.`;
+
+(async () => {
+  const snap = await getDoc(doc(db, 'site_content', 'main'));
+  const text = (snap.exists() && snap.data().termsText) ? snap.data().termsText : DEFAULT_TEXT;
+  document.getElementById('terms-body').textContent = text;
+})();
+</script>
+</body>
+</html>
