@@ -68,6 +68,20 @@
         <div class="field"><label>Price (₹)</label><input type="number" id="p-price" min="0" step="0.01"></div>
         <div class="field"><label>Category</label><input type="text" id="p-category" placeholder="e.g. Software"></div>
         <div class="field"><label>Description</label><textarea id="p-description"></textarea></div>
+
+        <div class="field" style="border-top:1px solid var(--divider); padding-top:16px;">
+          <label>Application file for customers to download (optional, up to 30 MB)</label>
+          <input type="file" id="p-file">
+          <p id="p-file-hint" style="font-size:.8rem; margin-top:6px;"></p>
+        </div>
+        <div class="field">
+          <label>Or a download link, for files larger than 30 MB (Google Drive, Dropbox, GitHub Releases…)</label>
+          <input type="url" id="p-fileurl" placeholder="https://…">
+        </div>
+        <p style="font-size:.8rem;">Customers can download this only after you verify their payment.</p>
+        <div class="progress" id="p-progress" style="display:none;"><div id="p-progress-bar"></div></div>
+        <p id="p-progress-text" style="font-size:.82rem; margin:8px 0;"></p>
+
         <div class="row">
           <button class="btn btn-primary" id="save-product-btn">Save</button>
           <button class="btn btn-outline" id="cancel-product-btn">Cancel</button>
@@ -198,6 +212,17 @@ function fmt(ts) {
 function orderTotal(o) { return Math.round(Number(o.unitPrice) * Number(o.quantity) * 100) / 100; }
 function money(n) { return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function orderRef(o) { return o.id.slice(0, 8).toUpperCase(); }
+function hasPrice(o) { return typeof o.unitPrice === 'number' && Number.isFinite(o.unitPrice); }
+function priceLabel(o) { return hasPrice(o) ? money(orderTotal(o)) : 'price not recorded'; }
+function resetProductFileFields(hint) {
+  document.getElementById('p-file').value = '';
+  document.getElementById('p-fileurl').value = '';
+  document.getElementById('p-file-hint').textContent = hint || '';
+  document.getElementById('p-progress').style.display = 'none';
+  document.getElementById('p-progress-bar').style.width = '0%';
+  document.getElementById('p-progress-text').textContent = '';
+  document.getElementById('product-message').className = 'form-message';
+}
 function setMsg(el, text, kind) { el.textContent = text; el.className = 'form-message visible ' + kind; }
 
 // ---------- login ----------
@@ -259,7 +284,7 @@ function notifyLinks(o) {
   const storeUrl = new URL('index.html', window.location.href).href;
   let text = '';
   if (o.status === 'confirmed') {
-    text = `Hello ${o.customerName}, your request for ${o.productName} (order ${orderRef(o)}) is confirmed. Please open ${storeUrl}, sign in and tap "Pay now" to pay ${money(orderTotal(o))}.`;
+    text = `Hello ${o.customerName}, your request for ${o.productName} (order ${orderRef(o)}) is confirmed. Please open ${storeUrl}, sign in and tap "Pay now" to pay${hasPrice(o) ? ' ' + money(orderTotal(o)) : ''}.`;
   } else if (o.status === 'completed') {
     text = `Hello ${o.customerName}, your payment for ${o.productName} (order ${orderRef(o)}) is verified. You can now download it after signing in at ${storeUrl}.`;
   } else if (o.status === 'cancelled') {
@@ -306,6 +331,7 @@ function renderOrders() {
   list.innerHTML = ordersCache.map(o => {
     const lines = [`<div>Requested: <b>${fmt(o.createdAt)}</b></div>`];
     if (o.confirmedAt) lines.push(`<div>Confirmed: <b>${fmt(o.confirmedAt)}</b></div>`);
+    else if (['confirmed', 'payment_submitted', 'completed'].includes(o.status)) lines.push(`<div>Confirmed: <b>time not recorded</b></div>`);
     if (o.paymentSubmittedAt) lines.push(`<div>Payment submitted: <b>${fmt(o.paymentSubmittedAt)}</b><br>Method: <b>${escapeHtml(o.paymentMethod)}</b> · UTR / Ref: <b>${escapeHtml(o.utr)}</b></div>`);
     if (o.completedAt) lines.push(`<div>Payment verified: <b>${fmt(o.completedAt)}</b></div>`);
     if (o.cancelledAt) lines.push(`<div>Cancelled: <b>${fmt(o.cancelledAt)}</b></div>`);
@@ -315,7 +341,7 @@ function renderOrders() {
         <div class="row-between">
           <div>
             <strong>${escapeHtml(o.productName)}</strong> × ${o.quantity}
-            <span style="color:#5F6B7A;"> · ${money(orderTotal(o))}</span>
+            <span style="color:#5F6B7A;"> · ${priceLabel(o)}</span>
             <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}</div>
           </div>
           <span class="status-pill ${o.status}">${STATUS_LABEL[o.status] || o.status}</span>
@@ -324,6 +350,7 @@ function renderOrders() {
           ${escapeHtml(o.customerName)} · ${escapeHtml(o.customerMobile)} · ${escapeHtml(o.customerEmail)}
         </div>
         <div class="timeline">${lines.join('')}</div>
+        ${hasPrice(o) ? '' : `<div class="hint" style="margin-top:8px; color:var(--danger);">This request was made before prices were recorded, so the customer can't pay yet. <button class="btn btn-outline btn-sm" data-act="fixprice" data-id="${o.id}">Set price from product</button></div>`}
         <div style="margin-top:12px;">${orderActions(o)}</div>
         ${notifyLinks(o)}
       </div>
@@ -355,10 +382,17 @@ document.getElementById('orders-list').onclick = async (e) => {
     if (act === 'confirm') {
       await updateDoc(orderRefDoc, { status: 'confirmed', confirmedAt: serverTimestamp() });
     } else if (act === 'complete') {
+      const prod = productsCache.find(x => x.id === o.productId);
+      if (prod && !prod.hasFile && !confirm('This product has no file attached yet, so the customer will have nothing to download. Verify the payment anyway? (You can attach the file later from Products → File.)')) { btn.disabled = false; return; }
       const batch = writeBatch(db);
       batch.update(orderRefDoc, { status: 'completed', completedAt: serverTimestamp() });
       batch.set(entRef, { customerUid: o.customerUid, productId: o.productId, orderId: o.id, grantedAt: serverTimestamp() });
       await batch.commit();
+    } else if (act === 'fixprice') {
+      const p = productsCache.find(x => x.id === o.productId);
+      if (!p) { alert('The product for this order no longer exists, so its price cannot be filled in. Please cancel this order.'); btn.disabled = false; return; }
+      if (!confirm(`Set this order's price to ${money(p.price)} (the product's current price) per item?`)) { btn.disabled = false; return; }
+      await updateDoc(orderRefDoc, { unitPrice: Number(p.price) });
     } else if (act === 'cancel') {
       if (!confirm('Cancel this request? If the customer already has download access, it will be revoked.')) { btn.disabled = false; return; }
       const batch = writeBatch(db);
@@ -403,6 +437,7 @@ async function loadProducts() {
 document.getElementById('new-product-btn').onclick = () => {
   document.getElementById('product-id').value = '';
   document.getElementById('product-form-title').textContent = 'Add product';
+  resetProductFileFields('');
   ['p-name', 'p-price', 'p-category', 'p-description'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('product-form-card').style.display = 'block';
 };
@@ -414,6 +449,7 @@ function editProduct(id) {
   const p = productsCache.find(x => x.id === id);
   document.getElementById('product-id').value = id;
   document.getElementById('product-form-title').textContent = 'Edit product';
+  resetProductFileFields(p.hasFile ? 'A file is already attached to this product. Choosing a new file or link below will replace it.' : '');
   document.getElementById('p-name').value = p.name;
   document.getElementById('p-price').value = p.price;
   document.getElementById('p-category').value = p.category || '';
@@ -430,19 +466,66 @@ document.getElementById('save-product-btn').onclick = async () => {
     description: document.getElementById('p-description').value.trim()
   };
   const msg = document.getElementById('product-message');
+  const file = document.getElementById('p-file').files[0];
+  const link = document.getElementById('p-fileurl').value.trim();
+
   if (!data.name || !data.price) { setMsg(msg, 'Name and price are required.', 'error'); return; }
+  if (file && file.size > MAX_FILE_BYTES) {
+    setMsg(msg, 'This file is larger than 30 MB. Upload it to Google Drive / Dropbox / GitHub Releases and paste the link instead.', 'error');
+    return;
+  }
+  if (!file && link && !/^https?:\/\//i.test(link)) {
+    setMsg(msg, 'Enter a full link starting with https://', 'error');
+    return;
+  }
+
+  const saveBtn = document.getElementById('save-product-btn');
+  const barWrap = document.getElementById('p-progress');
+  const bar = document.getElementById('p-progress-bar');
+  const text = document.getElementById('p-progress-text');
+  saveBtn.disabled = true;
+  msg.className = 'form-message';
+  let pid = id;
+  let productSaved = false;
+
   try {
+    text.textContent = 'Saving product…';
     if (id) {
       await updateDoc(doc(db, 'products', id), data);
     } else {
       data.createdAt = serverTimestamp();
       data.hasFile = false;
-      await addDoc(collection(db, 'products'), data);
+      const ref = await addDoc(collection(db, 'products'), data);
+      pid = ref.id;
     }
+    productSaved = true;
+
+    if (file) {
+      barWrap.style.display = 'block';
+      bar.style.width = '0%';
+      await uploadProductFile(pid, file, (done, total) => {
+        const pct = Math.round((done / total) * 100);
+        bar.style.width = pct + '%';
+        text.textContent = `Uploading file… ${pct}%. Keep this page open.`;
+      });
+    } else if (link) {
+      text.textContent = 'Saving download link…';
+      await saveProductLink(pid, link);
+    }
+
+    text.textContent = '';
     document.getElementById('product-form-card').style.display = 'none';
     loadProducts();
   } catch (err) {
-    setMsg(msg, err.message, 'error');
+    console.error(err);
+    if (productSaved) {
+      setMsg(msg, 'The product was saved, but attaching the file failed: ' + err.message + ' You can retry from the product\'s File button.', 'error');
+      loadProducts();
+    } else {
+      setMsg(msg, err.message, 'error');
+    }
+  } finally {
+    saveBtn.disabled = false;
   }
 };
 
@@ -470,6 +553,41 @@ async function deleteFileData(productId) {
   }
   if (n > 0) await batch.commit();
   await deleteDoc(metaRef);
+}
+
+// Uploads a file into Firestore in chunks. onProgress(done, total) is called after each chunk.
+async function uploadProductFile(pid, file, onProgress) {
+  await deleteFileData(pid);
+  await updateDoc(doc(db, 'products', pid), { hasFile: false });
+  const total = Math.max(1, Math.ceil(file.size / CHUNK_BYTES));
+  await setDoc(doc(db, 'product_files', pid), {
+    fileName: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    sizeBytes: file.size,
+    chunkCount: total,
+    externalUrl: '',
+    ready: false,
+    updatedAt: serverTimestamp()
+  });
+  for (let i = 0; i < total; i++) {
+    const buf = new Uint8Array(await file.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES).arrayBuffer());
+    await setDoc(doc(db, 'product_files', pid, 'chunks', String(i).padStart(5, '0')), {
+      index: i,
+      data: Bytes.fromUint8Array(buf)
+    });
+    if (onProgress) onProgress(i + 1, total);
+  }
+  await updateDoc(doc(db, 'product_files', pid), { ready: true });
+  await updateDoc(doc(db, 'products', pid), { hasFile: true });
+}
+
+async function saveProductLink(pid, url) {
+  await deleteFileData(pid);
+  await setDoc(doc(db, 'product_files', pid), {
+    fileName: '', mimeType: '', sizeBytes: 0, chunkCount: 0,
+    externalUrl: url, ready: true, updatedAt: serverTimestamp()
+  });
+  await updateDoc(doc(db, 'products', pid), { hasFile: true });
 }
 
 async function refreshFileInfo() {
@@ -524,35 +642,11 @@ document.getElementById('file-upload-btn').onclick = async () => {
   msg.className = 'form-message';
 
   try {
-    const pid = fileProductId;
-    text.textContent = 'Clearing the previous file…';
-    await deleteFileData(pid);
-    await updateDoc(doc(db, 'products', pid), { hasFile: false });
-
-    const total = Math.max(1, Math.ceil(file.size / CHUNK_BYTES));
-    await setDoc(doc(db, 'product_files', pid), {
-      fileName: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      chunkCount: total,
-      externalUrl: '',
-      ready: false,
-      updatedAt: serverTimestamp()
-    });
-
-    for (let i = 0; i < total; i++) {
-      const buf = new Uint8Array(await file.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES).arrayBuffer());
-      await setDoc(doc(db, 'product_files', pid, 'chunks', String(i).padStart(5, '0')), {
-        index: i,
-        data: Bytes.fromUint8Array(buf)
-      });
-      const pct = Math.round(((i + 1) / total) * 100);
+    await uploadProductFile(fileProductId, file, (done, total) => {
+      const pct = Math.round((done / total) * 100);
       bar.style.width = pct + '%';
-      text.textContent = `Uploading… ${pct}% (part ${i + 1} of ${total}). Keep this page open.`;
-    }
-
-    await updateDoc(doc(db, 'product_files', pid), { ready: true });
-    await updateDoc(doc(db, 'products', pid), { hasFile: true });
+      text.textContent = `Uploading… ${pct}% (part ${done} of ${total}). Keep this page open.`;
+    });
     text.textContent = 'Upload complete.';
     setMsg(msg, 'File uploaded. Customers get it only after you verify their payment.', 'success');
     input.value = '';
