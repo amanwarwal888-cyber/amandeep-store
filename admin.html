@@ -68,6 +68,12 @@
         <div class="field"><label>Price (₹)</label><input type="number" id="p-price" min="0" step="0.01"></div>
         <div class="field"><label>Category</label><input type="text" id="p-category" placeholder="e.g. Software"></div>
         <div class="field"><label>Description</label><textarea id="p-description"></textarea></div>
+        <div class="field">
+          <label style="display:flex; gap:8px; align-items:flex-start; font-weight:400;">
+            <input type="checkbox" id="p-hidden" style="width:auto; padding:0; margin-top:3px;">
+            <span><strong>Hide from the store</strong> — new customers can't see or buy it, but people who already bought it can still download it. Use this for an old version when you sell the new version as a separate product.</span>
+          </label>
+        </div>
 
         <div class="field" style="border-top:1px solid var(--divider); padding-top:16px;">
           <label>Application file for customers to download (optional, up to 30 MB)</label>
@@ -419,18 +425,20 @@ async function loadProducts() {
   productsCache.forEach(p => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escapeHtml(p.name)}<div style="font-size:.76rem;color:#5F6B7A;">${escapeHtml(p.category || '')}</div></td>
+      <td>${escapeHtml(p.name)}${p.hidden ? ' <span class="status-pill cancelled">Hidden</span>' : ''}<div style="font-size:.76rem;color:#5F6B7A;">${escapeHtml(p.category || '')}</div></td>
       <td>₹${Number(p.price).toLocaleString('en-IN')}</td>
       <td>${p.hasFile ? '✓ attached' : '—'}</td>
       <td>
         <button class="btn btn-outline btn-sm" data-edit="${p.id}">Edit</button>
         <button class="btn btn-outline btn-sm" data-file="${p.id}">File</button>
+        <button class="btn btn-outline btn-sm" data-toggle="${p.id}">${p.hidden ? 'Show' : 'Hide'}</button>
         <button class="btn btn-danger btn-sm" data-delete="${p.id}">Delete</button>
       </td>`;
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editProduct(b.dataset.edit));
   tbody.querySelectorAll('[data-file]').forEach(b => b.onclick = () => openFilePanel(b.dataset.file));
+  tbody.querySelectorAll('[data-toggle]').forEach(b => b.onclick = () => toggleHidden(b.dataset.toggle));
   tbody.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => deleteProduct(b.dataset.delete));
 }
 
@@ -439,6 +447,7 @@ document.getElementById('new-product-btn').onclick = () => {
   document.getElementById('product-form-title').textContent = 'Add product';
   resetProductFileFields('');
   ['p-name', 'p-price', 'p-category', 'p-description'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('p-hidden').checked = false;
   document.getElementById('product-form-card').style.display = 'block';
 };
 document.getElementById('cancel-product-btn').onclick = () => {
@@ -454,6 +463,7 @@ function editProduct(id) {
   document.getElementById('p-price').value = p.price;
   document.getElementById('p-category').value = p.category || '';
   document.getElementById('p-description').value = p.description || '';
+  document.getElementById('p-hidden').checked = !!p.hidden;
   document.getElementById('product-form-card').style.display = 'block';
 }
 
@@ -463,7 +473,8 @@ document.getElementById('save-product-btn').onclick = async () => {
     name: document.getElementById('p-name').value.trim(),
     price: parseFloat(document.getElementById('p-price').value) || 0,
     category: document.getElementById('p-category').value.trim(),
-    description: document.getElementById('p-description').value.trim()
+    description: document.getElementById('p-description').value.trim(),
+    hidden: document.getElementById('p-hidden').checked
   };
   const msg = document.getElementById('product-message');
   const file = document.getElementById('p-file').files[0];
@@ -529,8 +540,22 @@ document.getElementById('save-product-btn').onclick = async () => {
   }
 };
 
+async function toggleHidden(id) {
+  const p = productsCache.find(x => x.id === id);
+  if (!p) return;
+  const hide = !p.hidden;
+  const question = hide
+    ? `Hide "${p.name}" from the store? New customers won't see it. People who already bought it keep their download.`
+    : `Show "${p.name}" in the store again?`;
+  if (!confirm(question)) return;
+  try {
+    await updateDoc(doc(db, 'products', id), { hidden: hide });
+    loadProducts();
+  } catch (err) { alert(err.message); }
+}
+
 async function deleteProduct(id) {
-  if (!confirm('Delete this product? Its attached file will be removed too.')) return;
+  if (!confirm('Delete this product?\n\nIts file will be removed too, so people who already bought it will NO LONGER be able to download it.\n\nTo stop selling it but keep buyers\' downloads working, click Cancel and use "Hide" instead.')) return;
   try {
     await deleteFileData(id);
     await deleteDoc(doc(db, 'products', id));
