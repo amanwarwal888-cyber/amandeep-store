@@ -39,15 +39,23 @@
 <!-- Admin dashboard -->
 <div class="admin-shell" id="admin-shell" style="display:none;">
   <aside class="admin-sidebar">
-    <button class="tab-btn active" data-tab="products">Products</button>
+    <button class="tab-btn active" data-tab="orders">Orders <span class="badge" id="pending-badge" style="display:none;"></span></button>
+    <button class="tab-btn" data-tab="products">Products</button>
+    <button class="tab-btn" data-tab="payment">Payment Settings</button>
     <button class="tab-btn" data-tab="content">Site Content</button>
-    <button class="tab-btn" data-tab="orders">Orders</button>
   </aside>
 
   <main class="admin-main">
 
+    <!-- Orders tab -->
+    <section id="tab-orders">
+      <h2>Purchase requests</h2>
+      <p style="font-size:.86rem;">New requests appear here automatically. Flow: <strong>Confirm request</strong> → customer pays → <strong>Verify payment</strong> (check the UTR in your bank/UPI app first) → customer can download.</p>
+      <div id="orders-list"></div>
+    </section>
+
     <!-- Products tab -->
-    <section id="tab-products">
+    <section id="tab-products" style="display:none;">
       <div class="row-between">
         <h2 style="margin:0;">Products</h2>
         <button class="btn btn-primary btn-sm" id="new-product-btn">+ Add product</button>
@@ -57,8 +65,8 @@
         <h3 id="product-form-title">Add product</h3>
         <input type="hidden" id="product-id">
         <div class="field"><label>Name</label><input type="text" id="p-name"></div>
-        <div class="field"><label>Price (₹)</label><input type="number" id="p-price"></div>
-        <div class="field"><label>Category</label><input type="text" id="p-category" placeholder="e.g. Groceries"></div>
+        <div class="field"><label>Price (₹)</label><input type="number" id="p-price" min="0" step="0.01"></div>
+        <div class="field"><label>Category</label><input type="text" id="p-category" placeholder="e.g. Software"></div>
         <div class="field"><label>Description</label><textarea id="p-description"></textarea></div>
         <div class="row">
           <button class="btn btn-primary" id="save-product-btn">Save</button>
@@ -67,10 +75,68 @@
         <div class="form-message" id="product-message"></div>
       </div>
 
+      <!-- File panel -->
+      <div class="card" id="file-panel" style="display:none; margin-top:16px;">
+        <div class="row-between">
+          <h3 id="file-panel-title" style="margin:0;">Application file</h3>
+          <button class="btn btn-outline btn-sm" id="file-panel-close">Close</button>
+        </div>
+        <p id="file-current" style="margin-top:10px;"></p>
+
+        <div class="field">
+          <label>Upload the application file (up to 30 MB)</label>
+          <input type="file" id="file-input">
+        </div>
+        <button class="btn btn-primary btn-sm" id="file-upload-btn">Upload file</button>
+        <div class="progress" id="file-progress" style="display:none;"><div id="file-progress-bar"></div></div>
+        <p id="file-progress-text" style="font-size:.82rem; margin-top:8px;"></p>
+
+        <hr style="border:none; border-top:1px solid var(--divider); margin:18px 0;">
+
+        <div class="field">
+          <label>Or paste a download link (for files larger than 30 MB — Google Drive, Dropbox, GitHub Releases…)</label>
+          <input type="url" id="file-url" placeholder="https://…">
+        </div>
+        <div class="row">
+          <button class="btn btn-outline btn-sm" id="file-url-save-btn">Save link</button>
+          <button class="btn btn-danger btn-sm" id="file-remove-btn">Remove file</button>
+        </div>
+        <div class="form-message" id="file-message"></div>
+        <p style="font-size:.78rem; margin-top:12px;">Customers only get access after you verify their payment. A pasted link is hidden from everyone else, but anyone who receives it could share it — for stronger control, upload the file directly.</p>
+      </div>
+
       <table class="admin-table" id="products-table">
-        <thead><tr><th>Name</th><th>Category</th><th>Price</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Price</th><th>File</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <!-- Payment settings tab -->
+    <section id="tab-payment" style="display:none;">
+      <h2>Payment Settings</h2>
+      <p style="font-size:.86rem;">Customers see these details in the payment window after you confirm their request.</p>
+
+      <div class="card">
+        <h3>UPI</h3>
+        <div class="field"><label>UPI ID</label><input type="text" id="s-upi" placeholder="yourname@bank"></div>
+        <div class="field"><label>Payee name (shown in the UPI app)</label><input type="text" id="s-payee"></div>
+        <p style="font-size:.8rem;">With a UPI ID, customers get Google Pay / PhonePe / Paytm buttons and a QR code with the amount filled in automatically.</p>
+      </div>
+
+      <div class="card">
+        <h3>Debit / credit card</h3>
+        <div class="field"><label>Card payment link</label><input type="url" id="s-card" placeholder="https://rzp.io/… or your payment provider's link"></div>
+        <p style="font-size:.8rem;">Card payments need a payment provider (for example Razorpay, Cashfree, PayU or Stripe). Create a payment link in their dashboard and paste it here. The provider hosts the card page, so card numbers never touch this website.</p>
+      </div>
+
+      <div class="card">
+        <h3>Bank account details</h3>
+        <div class="field"><textarea id="s-bank" placeholder="Account name:&#10;Account number:&#10;IFSC:&#10;Bank & branch:"></textarea></div>
+        <p style="font-size:.8rem;">Optional. Visible to signed-in customers when they open the payment window.</p>
+      </div>
+
+      <button class="btn btn-primary" id="save-payment-btn">Save payment settings</button>
+      <div class="form-message" id="payment-message"></div>
     </section>
 
     <!-- Site content tab -->
@@ -95,22 +161,14 @@
       <div class="form-message" id="content-message"></div>
     </section>
 
-    <!-- Orders tab -->
-    <section id="tab-orders" style="display:none;">
-      <h2>Purchase requests</h2>
-      <table class="admin-table" id="orders-table">
-        <thead><tr><th>Customer</th><th>Product</th><th>Qty</th><th>Status</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
-
   </main>
 </div>
 
 <script type="module">
 import {
   auth, db, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  query, orderBy, serverTimestamp, signInWithEmailAndPassword, onAuthStateChanged, signOut,
+  query, orderBy, serverTimestamp, onSnapshot, writeBatch, Bytes,
+  signInWithEmailAndPassword, onAuthStateChanged, signOut,
   ADMIN_EMAIL
 } from './firebase-init.js';
 
@@ -118,7 +176,31 @@ const loginShell = document.getElementById('login-shell');
 const adminShell = document.getElementById('admin-shell');
 const adminAccountArea = document.getElementById('admin-account-area');
 
-// ---- Login ----
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
+const CHUNK_BYTES = 800000;
+
+let ordersCache = [];
+let unsubOrders = null;
+let productsCache = [];
+let fileProductId = null;
+
+// ---------- helpers ----------
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+function fmt(ts) {
+  if (!ts || !ts.toDate) return '—';
+  return ts.toDate().toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true
+  });
+}
+function orderTotal(o) { return Math.round(Number(o.unitPrice) * Number(o.quantity) * 100) / 100; }
+function money(n) { return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function orderRef(o) { return o.id.slice(0, 8).toUpperCase(); }
+function setMsg(el, text, kind) { el.textContent = text; el.className = 'form-message visible ' + kind; }
+
+// ---------- login ----------
 document.getElementById('login-btn').onclick = async () => {
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
@@ -126,8 +208,7 @@ document.getElementById('login-btn').onclick = async () => {
   try {
     await signInWithEmailAndPassword(auth, email, password);
   } catch (err) {
-    msg.textContent = err.message;
-    msg.className = 'form-message visible error';
+    setMsg(msg, err.message, 'error');
   }
 };
 
@@ -137,21 +218,21 @@ onAuthStateChanged(auth, (user) => {
     adminShell.style.display = 'flex';
     adminAccountArea.innerHTML = `<button class="btn btn-outline btn-sm" id="admin-signout">Sign out</button>`;
     document.getElementById('admin-signout').onclick = () => signOut(auth);
+    watchOrders();
     loadProducts();
   } else {
     if (user) {
-      // signed in but not the admin account
       signOut(auth);
-      document.getElementById('login-message').textContent = 'This account is not authorized as admin.';
-      document.getElementById('login-message').className = 'form-message visible error';
+      setMsg(document.getElementById('login-message'), 'This account is not authorized as admin.', 'error');
     }
+    if (unsubOrders) { unsubOrders(); unsubOrders = null; }
     loginShell.style.display = 'block';
     adminShell.style.display = 'none';
     adminAccountArea.innerHTML = '';
   }
 });
 
-// ---- Tabs ----
+// ---------- tabs ----------
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.onclick = () => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -159,51 +240,178 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.admin-main > section').forEach(s => s.style.display = 'none');
     document.getElementById('tab-' + btn.dataset.tab).style.display = 'block';
     if (btn.dataset.tab === 'content') loadContent();
-    if (btn.dataset.tab === 'orders') loadOrders();
+    if (btn.dataset.tab === 'payment') loadPayment();
+    if (btn.dataset.tab === 'products') loadProducts();
   };
 });
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+// =====================================================================
+// ORDERS
+// =====================================================================
+function waNumber(mobile) {
+  let d = String(mobile || '').replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  if (d.length === 10) d = '91' + d;
+  return d.length >= 11 ? d : '';
 }
 
-// ---- Products ----
+function notifyLinks(o) {
+  const storeUrl = new URL('index.html', window.location.href).href;
+  let text = '';
+  if (o.status === 'confirmed') {
+    text = `Hello ${o.customerName}, your request for ${o.productName} (order ${orderRef(o)}) is confirmed. Please open ${storeUrl}, sign in and tap "Pay now" to pay ${money(orderTotal(o))}.`;
+  } else if (o.status === 'completed') {
+    text = `Hello ${o.customerName}, your payment for ${o.productName} (order ${orderRef(o)}) is verified. You can now download it after signing in at ${storeUrl}.`;
+  } else if (o.status === 'cancelled') {
+    text = `Hello ${o.customerName}, your request for ${o.productName} (order ${orderRef(o)}) has been cancelled. Please contact us if you have questions.`;
+  }
+  if (!text) return '';
+  const num = waNumber(o.customerMobile);
+  const wa = num ? `<a class="btn btn-outline btn-sm" target="_blank" rel="noopener" href="https://wa.me/${num}?text=${encodeURIComponent(text)}">WhatsApp</a>` : '';
+  const mail = o.customerEmail
+    ? `<a class="btn btn-outline btn-sm" href="mailto:${escapeHtml(o.customerEmail)}?subject=${encodeURIComponent('Your order ' + orderRef(o))}&body=${encodeURIComponent(text)}">Email</a>`
+    : '';
+  return `<div class="row" style="margin-top:8px;"><span style="font-size:.78rem;">Notify customer:</span> ${wa} ${mail}</div>`;
+}
+
+const STATUS_LABEL = {
+  pending: 'New request',
+  confirmed: 'Confirmed — awaiting payment',
+  payment_submitted: 'Payment submitted — verify',
+  completed: 'Completed',
+  cancelled: 'Cancelled'
+};
+
+function orderActions(o) {
+  const b = (act, label, cls) => `<button class="btn ${cls} btn-sm" data-act="${act}" data-id="${o.id}">${label}</button>`;
+  if (o.status === 'pending') return b('confirm', 'Confirm request', 'btn-primary') + ' ' + b('cancel', 'Cancel', 'btn-danger');
+  if (o.status === 'confirmed') return b('complete', 'Mark payment received', 'btn-primary') + ' ' + b('cancel', 'Cancel', 'btn-danger');
+  if (o.status === 'payment_submitted') return b('complete', 'Verify payment & unlock', 'btn-primary') + ' ' + b('cancel', 'Reject / cancel', 'btn-danger');
+  if (o.status === 'completed') return b('cancel', 'Revoke access', 'btn-danger');
+  return '';
+}
+
+function renderOrders() {
+  const list = document.getElementById('orders-list');
+  const pending = ordersCache.filter(o => o.status === 'pending' || o.status === 'payment_submitted').length;
+  const badge = document.getElementById('pending-badge');
+  badge.style.display = pending ? 'inline-block' : 'none';
+  badge.textContent = pending;
+
+  if (ordersCache.length === 0) {
+    list.innerHTML = `<div class="empty-state">No purchase requests yet.</div>`;
+    return;
+  }
+
+  list.innerHTML = ordersCache.map(o => {
+    const lines = [`<div>Requested: <b>${fmt(o.createdAt)}</b></div>`];
+    if (o.confirmedAt) lines.push(`<div>Confirmed: <b>${fmt(o.confirmedAt)}</b></div>`);
+    if (o.paymentSubmittedAt) lines.push(`<div>Payment submitted: <b>${fmt(o.paymentSubmittedAt)}</b><br>Method: <b>${escapeHtml(o.paymentMethod)}</b> · UTR / Ref: <b>${escapeHtml(o.utr)}</b></div>`);
+    if (o.completedAt) lines.push(`<div>Payment verified: <b>${fmt(o.completedAt)}</b></div>`);
+    if (o.cancelledAt) lines.push(`<div>Cancelled: <b>${fmt(o.cancelledAt)}</b></div>`);
+
+    return `
+      <div class="card order-card-admin">
+        <div class="row-between">
+          <div>
+            <strong>${escapeHtml(o.productName)}</strong> × ${o.quantity}
+            <span style="color:#5F6B7A;"> · ${money(orderTotal(o))}</span>
+            <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}</div>
+          </div>
+          <span class="status-pill ${o.status}">${STATUS_LABEL[o.status] || o.status}</span>
+        </div>
+        <div style="margin-top:10px; font-size:.86rem;">
+          ${escapeHtml(o.customerName)} · ${escapeHtml(o.customerMobile)} · ${escapeHtml(o.customerEmail)}
+        </div>
+        <div class="timeline">${lines.join('')}</div>
+        <div style="margin-top:12px;">${orderActions(o)}</div>
+        ${notifyLinks(o)}
+      </div>
+    `;
+  }).join('');
+}
+
+function watchOrders() {
+  if (unsubOrders) unsubOrders();
+  const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+  unsubOrders = onSnapshot(q, (snap) => {
+    ordersCache = [];
+    snap.forEach(d => ordersCache.push({ id: d.id, ...d.data({ serverTimestamps: 'estimate' }) }));
+    renderOrders();
+  }, (err) => console.error('Orders listener error:', err));
+}
+
+document.getElementById('orders-list').onclick = async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const o = ordersCache.find(x => x.id === btn.dataset.id);
+  if (!o) return;
+  const act = btn.dataset.act;
+  const orderRefDoc = doc(db, 'orders', o.id);
+  const entRef = doc(db, 'entitlements', `${o.customerUid}_${o.productId}`);
+
+  try {
+    btn.disabled = true;
+    if (act === 'confirm') {
+      await updateDoc(orderRefDoc, { status: 'confirmed', confirmedAt: serverTimestamp() });
+    } else if (act === 'complete') {
+      const batch = writeBatch(db);
+      batch.update(orderRefDoc, { status: 'completed', completedAt: serverTimestamp() });
+      batch.set(entRef, { customerUid: o.customerUid, productId: o.productId, orderId: o.id, grantedAt: serverTimestamp() });
+      await batch.commit();
+    } else if (act === 'cancel') {
+      if (!confirm('Cancel this request? If the customer already has download access, it will be revoked.')) { btn.disabled = false; return; }
+      const batch = writeBatch(db);
+      batch.update(orderRefDoc, { status: 'cancelled', cancelledAt: serverTimestamp() });
+      batch.delete(entRef);
+      await batch.commit();
+    }
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+};
+
+// =====================================================================
+// PRODUCTS + FILES
+// =====================================================================
 async function loadProducts() {
   const tbody = document.querySelector('#products-table tbody');
   const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
   const snap = await getDocs(q);
+  productsCache = [];
+  snap.forEach(d => productsCache.push({ id: d.id, ...d.data() }));
   tbody.innerHTML = '';
-  snap.forEach(d => {
-    const p = d.data();
+  productsCache.forEach(p => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escapeHtml(p.name)}</td>
-      <td>${escapeHtml(p.category || '—')}</td>
+      <td>${escapeHtml(p.name)}<div style="font-size:.76rem;color:#5F6B7A;">${escapeHtml(p.category || '')}</div></td>
       <td>₹${Number(p.price).toLocaleString('en-IN')}</td>
+      <td>${p.hasFile ? '✓ attached' : '—'}</td>
       <td>
-        <button class="btn btn-outline btn-sm" data-edit="${d.id}">Edit</button>
-        <button class="btn btn-danger btn-sm" data-delete="${d.id}">Delete</button>
+        <button class="btn btn-outline btn-sm" data-edit="${p.id}">Edit</button>
+        <button class="btn btn-outline btn-sm" data-file="${p.id}">File</button>
+        <button class="btn btn-danger btn-sm" data-delete="${p.id}">Delete</button>
       </td>`;
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editProduct(b.dataset.edit));
+  tbody.querySelectorAll('[data-file]').forEach(b => b.onclick = () => openFilePanel(b.dataset.file));
   tbody.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => deleteProduct(b.dataset.delete));
 }
 
 document.getElementById('new-product-btn').onclick = () => {
   document.getElementById('product-id').value = '';
   document.getElementById('product-form-title').textContent = 'Add product';
-  ['p-name','p-price','p-category','p-description'].forEach(id => document.getElementById(id).value = '');
+  ['p-name', 'p-price', 'p-category', 'p-description'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('product-form-card').style.display = 'block';
 };
-
 document.getElementById('cancel-product-btn').onclick = () => {
   document.getElementById('product-form-card').style.display = 'none';
 };
 
-async function editProduct(id) {
-  const snap = await getDoc(doc(db, 'products', id));
-  const p = snap.data();
+function editProduct(id) {
+  const p = productsCache.find(x => x.id === id);
   document.getElementById('product-id').value = id;
   document.getElementById('product-form-title').textContent = 'Edit product';
   document.getElementById('p-name').value = p.name;
@@ -222,33 +430,204 @@ document.getElementById('save-product-btn').onclick = async () => {
     description: document.getElementById('p-description').value.trim()
   };
   const msg = document.getElementById('product-message');
-  if (!data.name || !data.price) {
-    msg.textContent = 'Name and price are required.';
-    msg.className = 'form-message visible error';
-    return;
-  }
+  if (!data.name || !data.price) { setMsg(msg, 'Name and price are required.', 'error'); return; }
   try {
     if (id) {
       await updateDoc(doc(db, 'products', id), data);
     } else {
       data.createdAt = serverTimestamp();
+      data.hasFile = false;
       await addDoc(collection(db, 'products'), data);
     }
     document.getElementById('product-form-card').style.display = 'none';
     loadProducts();
   } catch (err) {
-    msg.textContent = err.message;
-    msg.className = 'form-message visible error';
+    setMsg(msg, err.message, 'error');
   }
 };
 
 async function deleteProduct(id) {
-  if (!confirm('Delete this product?')) return;
-  await deleteDoc(doc(db, 'products', id));
-  loadProducts();
+  if (!confirm('Delete this product? Its attached file will be removed too.')) return;
+  try {
+    await deleteFileData(id);
+    await deleteDoc(doc(db, 'products', id));
+    loadProducts();
+  } catch (err) { alert(err.message); }
 }
 
-// ---- Site content ----
+// ----- file panel -----
+async function deleteFileData(productId) {
+  const metaRef = doc(db, 'product_files', productId);
+  const metaSnap = await getDoc(metaRef);
+  if (!metaSnap.exists()) return;
+  const count = Number(metaSnap.data().chunkCount || 0);
+  let batch = writeBatch(db);
+  let n = 0;
+  for (let i = 0; i < count; i++) {
+    batch.delete(doc(db, 'product_files', productId, 'chunks', String(i).padStart(5, '0')));
+    n++;
+    if (n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+  }
+  if (n > 0) await batch.commit();
+  await deleteDoc(metaRef);
+}
+
+async function refreshFileInfo() {
+  const cur = document.getElementById('file-current');
+  const p = productsCache.find(x => x.id === fileProductId);
+  document.getElementById('file-panel-title').textContent = 'Application file — ' + (p ? p.name : '');
+  const snap = await getDoc(doc(db, 'product_files', fileProductId));
+  if (!snap.exists()) { cur.textContent = 'No file attached yet.'; document.getElementById('file-url').value = ''; return; }
+  const m = snap.data();
+  if (m.externalUrl) {
+    cur.innerHTML = `Attached: download link → <a href="${escapeHtml(m.externalUrl)}" target="_blank" rel="noopener">${escapeHtml(m.externalUrl)}</a>`;
+    document.getElementById('file-url').value = m.externalUrl;
+  } else {
+    const mb = (Number(m.sizeBytes || 0) / (1024 * 1024)).toFixed(2);
+    cur.innerHTML = `Attached: <strong>${escapeHtml(m.fileName)}</strong> (${mb} MB)${m.ready === false ? ' — <em>upload incomplete</em>' : ''}`;
+    document.getElementById('file-url').value = '';
+  }
+}
+
+function openFilePanel(id) {
+  fileProductId = id;
+  document.getElementById('file-panel').style.display = 'block';
+  document.getElementById('file-input').value = '';
+  document.getElementById('file-message').className = 'form-message';
+  document.getElementById('file-progress').style.display = 'none';
+  document.getElementById('file-progress-text').textContent = '';
+  refreshFileInfo();
+  document.getElementById('file-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+document.getElementById('file-panel-close').onclick = () => {
+  document.getElementById('file-panel').style.display = 'none';
+  fileProductId = null;
+};
+
+document.getElementById('file-upload-btn').onclick = async () => {
+  const msg = document.getElementById('file-message');
+  const input = document.getElementById('file-input');
+  const file = input.files[0];
+  if (!file) { setMsg(msg, 'Choose a file first.', 'error'); return; }
+  if (file.size > MAX_FILE_BYTES) {
+    setMsg(msg, 'This file is larger than 30 MB. Upload it to Google Drive / Dropbox / GitHub Releases and paste the link below instead.', 'error');
+    return;
+  }
+
+  const uploadBtn = document.getElementById('file-upload-btn');
+  const bar = document.getElementById('file-progress-bar');
+  const barWrap = document.getElementById('file-progress');
+  const text = document.getElementById('file-progress-text');
+  uploadBtn.disabled = true;
+  barWrap.style.display = 'block';
+  bar.style.width = '0%';
+  msg.className = 'form-message';
+
+  try {
+    const pid = fileProductId;
+    text.textContent = 'Clearing the previous file…';
+    await deleteFileData(pid);
+    await updateDoc(doc(db, 'products', pid), { hasFile: false });
+
+    const total = Math.max(1, Math.ceil(file.size / CHUNK_BYTES));
+    await setDoc(doc(db, 'product_files', pid), {
+      fileName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+      chunkCount: total,
+      externalUrl: '',
+      ready: false,
+      updatedAt: serverTimestamp()
+    });
+
+    for (let i = 0; i < total; i++) {
+      const buf = new Uint8Array(await file.slice(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES).arrayBuffer());
+      await setDoc(doc(db, 'product_files', pid, 'chunks', String(i).padStart(5, '0')), {
+        index: i,
+        data: Bytes.fromUint8Array(buf)
+      });
+      const pct = Math.round(((i + 1) / total) * 100);
+      bar.style.width = pct + '%';
+      text.textContent = `Uploading… ${pct}% (part ${i + 1} of ${total}). Keep this page open.`;
+    }
+
+    await updateDoc(doc(db, 'product_files', pid), { ready: true });
+    await updateDoc(doc(db, 'products', pid), { hasFile: true });
+    text.textContent = 'Upload complete.';
+    setMsg(msg, 'File uploaded. Customers get it only after you verify their payment.', 'success');
+    input.value = '';
+    await refreshFileInfo();
+    loadProducts();
+  } catch (err) {
+    console.error(err);
+    setMsg(msg, 'Upload failed: ' + err.message, 'error');
+  } finally {
+    uploadBtn.disabled = false;
+  }
+};
+
+document.getElementById('file-url-save-btn').onclick = async () => {
+  const msg = document.getElementById('file-message');
+  const url = document.getElementById('file-url').value.trim();
+  if (!/^https?:\/\//i.test(url)) { setMsg(msg, 'Enter a full link starting with https://', 'error'); return; }
+  try {
+    const pid = fileProductId;
+    await deleteFileData(pid);
+    await setDoc(doc(db, 'product_files', pid), {
+      fileName: '', mimeType: '', sizeBytes: 0, chunkCount: 0,
+      externalUrl: url, ready: true, updatedAt: serverTimestamp()
+    });
+    await updateDoc(doc(db, 'products', pid), { hasFile: true });
+    setMsg(msg, 'Download link saved.', 'success');
+    await refreshFileInfo();
+    loadProducts();
+  } catch (err) { setMsg(msg, err.message, 'error'); }
+};
+
+document.getElementById('file-remove-btn').onclick = async () => {
+  const msg = document.getElementById('file-message');
+  if (!confirm('Remove the attached file / link from this product?')) return;
+  try {
+    const pid = fileProductId;
+    await deleteFileData(pid);
+    await updateDoc(doc(db, 'products', pid), { hasFile: false });
+    setMsg(msg, 'File removed.', 'success');
+    await refreshFileInfo();
+    loadProducts();
+  } catch (err) { setMsg(msg, err.message, 'error'); }
+};
+
+// =====================================================================
+// PAYMENT SETTINGS
+// =====================================================================
+async function loadPayment() {
+  const snap = await getDoc(doc(db, 'settings', 'payment'));
+  const s = snap.exists() ? snap.data() : {};
+  document.getElementById('s-upi').value = s.upiId || '';
+  document.getElementById('s-payee').value = s.payeeName || '';
+  document.getElementById('s-card').value = s.cardPaymentLink || '';
+  document.getElementById('s-bank').value = s.bankDetails || '';
+}
+
+document.getElementById('save-payment-btn').onclick = async () => {
+  const msg = document.getElementById('payment-message');
+  const card = document.getElementById('s-card').value.trim();
+  if (card && !/^https:\/\//i.test(card)) { setMsg(msg, 'The card payment link must start with https://', 'error'); return; }
+  try {
+    await setDoc(doc(db, 'settings', 'payment'), {
+      upiId: document.getElementById('s-upi').value.trim(),
+      payeeName: document.getElementById('s-payee').value.trim(),
+      cardPaymentLink: card,
+      bankDetails: document.getElementById('s-bank').value,
+      updatedAt: serverTimestamp()
+    });
+    setMsg(msg, 'Payment settings saved.', 'success');
+  } catch (err) { setMsg(msg, err.message, 'error'); }
+};
+
+// =====================================================================
+// SITE CONTENT
+// =====================================================================
 async function loadContent() {
   const snap = await getDoc(doc(db, 'site_content', 'main'));
   const c = snap.exists() ? snap.data() : {};
@@ -261,56 +640,20 @@ async function loadContent() {
 }
 
 document.getElementById('save-content-btn').onclick = async () => {
-  const data = {
-    contactEmail: document.getElementById('c-email').value.trim(),
-    contactPhone: document.getElementById('c-phone').value.trim(),
-    contactAltPhone: document.getElementById('c-altphone').value.trim(),
-    contactAddress: document.getElementById('c-address').value.trim(),
-    privacyText: document.getElementById('c-privacy').value,
-    termsText: document.getElementById('c-terms').value,
-    updatedAt: serverTimestamp()
-  };
   const msg = document.getElementById('content-message');
   try {
-    await setDoc(doc(db, 'site_content', 'main'), data, { merge: true });
-    msg.textContent = 'Saved.';
-    msg.className = 'form-message visible success';
-  } catch (err) {
-    msg.textContent = err.message;
-    msg.className = 'form-message visible error';
-  }
+    await setDoc(doc(db, 'site_content', 'main'), {
+      contactEmail: document.getElementById('c-email').value.trim(),
+      contactPhone: document.getElementById('c-phone').value.trim(),
+      contactAltPhone: document.getElementById('c-altphone').value.trim(),
+      contactAddress: document.getElementById('c-address').value.trim(),
+      privacyText: document.getElementById('c-privacy').value,
+      termsText: document.getElementById('c-terms').value,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    setMsg(msg, 'Saved.', 'success');
+  } catch (err) { setMsg(msg, err.message, 'error'); }
 };
-
-// ---- Orders ----
-async function loadOrders() {
-  const tbody = document.querySelector('#orders-table tbody');
-  const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-  const snap = await getDocs(q);
-  tbody.innerHTML = '';
-  snap.forEach(d => {
-    const o = d.data();
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${escapeHtml(o.customerName)}<br><span style="font-size:.8em;color:#5F6B7A;">${escapeHtml(o.customerEmail)} · ${escapeHtml(o.customerMobile || '')}</span></td>
-      <td>${escapeHtml(o.productName)}</td>
-      <td>${o.quantity}</td>
-      <td><span class="status-pill ${o.status}">${o.status}</span></td>
-      <td>
-        <select data-status="${d.id}">
-          <option value="pending" ${o.status==='pending'?'selected':''}>Pending</option>
-          <option value="confirmed" ${o.status==='confirmed'?'selected':''}>Confirmed</option>
-          <option value="cancelled" ${o.status==='cancelled'?'selected':''}>Cancelled</option>
-        </select>
-      </td>`;
-    tbody.appendChild(tr);
-  });
-  tbody.querySelectorAll('[data-status]').forEach(sel => {
-    sel.onchange = async () => {
-      await updateDoc(doc(db, 'orders', sel.dataset.status), { status: sel.value });
-      loadOrders();
-    };
-  });
-}
 </script>
 </body>
 </html>
