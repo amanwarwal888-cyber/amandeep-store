@@ -56,7 +56,8 @@ service cloud.firestore {
         && request.resource.data.quantity is int
         && request.resource.data.quantity >= 1
         && request.resource.data.unitPrice ==
-             get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.price;
+             get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.price
+        && get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.get('hidden', false) == false;
 
       allow read: if request.auth != null
         && (resource.data.customerUid == request.auth.uid || isAdmin());
