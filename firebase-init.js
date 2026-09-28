@@ -43,6 +43,9 @@ import {
   query,
   orderBy,
   where,
+  onSnapshot,
+  writeBatch,
+  Bytes,
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
@@ -52,7 +55,7 @@ export const db = getFirestore(app);
 
 export {
   collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
-  getDoc, getDocs, query, orderBy, where, serverTimestamp,
+  getDoc, getDocs, query, orderBy, where, onSnapshot, writeBatch, Bytes, serverTimestamp,
   sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
   signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut
 };
