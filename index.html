@@ -239,6 +239,7 @@ function money(n) {
 }
 
 function orderRef(o) { return o.id.slice(0, 8).toUpperCase(); }
+function hasPrice(o) { return typeof o.unitPrice === 'number' && Number.isFinite(o.unitPrice); }
 
 let toastTimer = null;
 function showToast(msg) {
@@ -434,13 +435,16 @@ const STATUS_LABEL = {
 function orderCardHtml(o) {
   const lines = [`<div>Requested: <b>${fmt(o.createdAt)}</b></div>`];
   if (o.confirmedAt) lines.push(`<div>Confirmed: <b>${fmt(o.confirmedAt)}</b></div>`);
+  else if (['confirmed', 'payment_submitted', 'completed'].includes(o.status)) lines.push(`<div>Confirmed: <b>time not recorded</b></div>`);
   if (o.paymentSubmittedAt) lines.push(`<div>Payment submitted: <b>${fmt(o.paymentSubmittedAt)}</b> · ${escapeHtml(o.paymentMethod)} · Ref ${escapeHtml(o.utr)}</div>`);
   if (o.completedAt) lines.push(`<div>Payment verified: <b>${fmt(o.completedAt)}</b></div>`);
   if (o.cancelledAt) lines.push(`<div>Cancelled: <b>${fmt(o.cancelledAt)}</b></div>`);
 
   let action = '';
   if (o.status === 'pending') action = `<span class="hint">Waiting for confirmation…</span>`;
-  else if (o.status === 'confirmed') action = `<button class="btn btn-primary btn-sm" data-pay="${o.id}">Pay now</button>`;
+  else if (o.status === 'confirmed') action = hasPrice(o)
+    ? `<button class="btn btn-primary btn-sm" data-pay="${o.id}">Pay now</button>`
+    : `<span class="hint">We're updating the price for this order. Please check back shortly.</span>`;
   else if (o.status === 'payment_submitted') action = `<span class="hint">Waiting for payment verification…</span>`;
   else if (o.status === 'completed') action = `<button class="btn btn-primary btn-sm" data-download="${o.id}">Download application</button>`;
 
@@ -449,7 +453,7 @@ function orderCardHtml(o) {
       <div class="row-between">
         <div>
           <strong>${escapeHtml(o.productName)}</strong>
-          <span style="color:#5F6B7A;"> × ${o.quantity} · ${money(orderTotal(o))}</span>
+          <span style="color:#5F6B7A;"> × ${o.quantity}${hasPrice(o) ? ' · ' + money(orderTotal(o)) : ''}</span>
           <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}</div>
         </div>
         <span class="status-pill ${o.status}">${STATUS_LABEL[o.status] || o.status}</span>
@@ -498,7 +502,7 @@ async function loadProducts() {
   const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
   const snap = await getDocs(q);
   products = [];
-  snap.forEach(d => products.push({ id: d.id, ...d.data() }));
+  snap.forEach(d => { const p = { id: d.id, ...d.data() }; if (!p.hidden) products.push(p); });
 
   if (products.length === 0) {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No products listed yet. Check back soon.</div>`;
@@ -677,6 +681,7 @@ document.querySelectorAll('#pay-tabs button').forEach(b => b.onclick = () => set
 async function openPayment(orderId) {
   payOrder = ordersCache.find(o => o.id === orderId);
   if (!payOrder) return;
+  if (!hasPrice(payOrder)) { showToast("The price for this order is still being updated. Please check back shortly."); return; }
   paySettings = {};
   try {
     const s = await getDoc(doc(db, 'settings', 'payment'));
