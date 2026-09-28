@@ -7,6 +7,12 @@ service cloud.firestore {
         && request.auth.token.email == 'amanwarwal888@gmail.com';
     }
 
+    // True when the signed-in customer has been granted access to this product's file
+    function hasAccess(productId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/entitlements/$(request.auth.uid + '_' + productId));
+    }
+
     // Product catalog — anyone can read, only the admin can add/edit/delete
     match /products/{productId} {
       allow read: if true;
@@ -19,8 +25,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Customer records — a signed-in customer can create/read/update only their own record;
-    // the admin can read all of them
+    // Payment settings (UPI ID, bank details, card payment link) —
+    // visible to signed-in customers only, editable by the admin only
+    match /settings/{docId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // Customer records — a customer can create/read/update only their own record
     match /customers/{customerId} {
       allow create: if request.auth != null && request.auth.uid == customerId;
       allow read, update: if request.auth != null &&
@@ -28,14 +40,62 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Purchase requests — a signed-in customer can create their own order and read it back;
-    // only the admin can read all orders or change their status
+    // Orders
     match /orders/{orderId} {
+
+      // A customer can create a request only as "pending", with the real product price
+      // and a server-set timestamp
       allow create: if request.auth != null
-        && request.resource.data.customerUid == request.auth.uid;
-      allow read: if request.auth != null &&
-        (resource.data.customerUid == request.auth.uid || isAdmin());
-      allow update, delete: if isAdmin();
+        && request.resource.data.keys().hasOnly([
+             'customerUid', 'customerName', 'customerEmail', 'customerMobile',
+             'productId', 'productName', 'quantity', 'unitPrice', 'status', 'createdAt'
+           ])
+        && request.resource.data.customerUid == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 1
+        && request.resource.data.unitPrice ==
+             get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.price;
+
+      allow read: if request.auth != null
+        && (resource.data.customerUid == request.auth.uid || isAdmin());
+
+      // The admin can change anything. A customer can ONLY submit their payment
+      // reference on their own confirmed order — they cannot mark it as paid/completed.
+      allow update: if isAdmin() || (
+        request.auth != null
+        && resource.data.customerUid == request.auth.uid
+        && resource.data.status == 'confirmed'
+        && request.resource.data.status == 'payment_submitted'
+        && request.resource.data.paymentSubmittedAt == request.time
+        && request.resource.data.utr is string
+        && request.resource.data.utr.size() >= 4
+        && request.resource.data.utr.size() <= 40
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'paymentMethod', 'utr', 'paymentSubmittedAt'])
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // Access grants — created by the admin when a payment is verified
+    match /entitlements/{entId} {
+      allow read: if request.auth != null
+        && (resource.data.customerUid == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Downloadable application files — readable only by the admin, or by a customer
+    // whose payment has been verified for that specific product
+    match /product_files/{productId} {
+      allow read: if isAdmin() || hasAccess(productId);
+      allow write: if isAdmin();
+
+      match /chunks/{chunkId} {
+        allow read: if isAdmin() || hasAccess(productId);
+        allow write: if isAdmin();
+      }
     }
   }
 }
