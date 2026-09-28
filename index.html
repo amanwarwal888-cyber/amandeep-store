@@ -6,6 +6,7 @@
 <title>Store — Amandeep Singh</title>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -27,6 +28,8 @@
   </nav>
 </header>
 
+<div class="toast" id="toast"></div>
+
 <section class="hero">
   <div class="container">
     <h1>Browse our products</h1>
@@ -42,7 +45,14 @@
 </main>
 
 <footer class="site-footer">
-  <div class="container">&copy; <span id="year"></span> Amandeep Singh. All rights reserved.</div>
+  <div class="container">
+    <div style="margin-bottom:8px;">
+      <a href="privacy.html">Privacy Policy</a> &nbsp;·&nbsp;
+      <a href="terms.html">Terms</a> &nbsp;·&nbsp;
+      <a href="contact.html">Contact</a>
+    </div>
+    &copy; <span id="year"></span> Amandeep Singh. All rights reserved.
+  </div>
 </footer>
 
 <!-- Register / Sign-in modal -->
@@ -121,15 +131,63 @@
       <label for="purchase-qty">Quantity</label>
       <input type="number" id="purchase-qty" value="1" min="1">
     </div>
-    <button class="btn btn-primary btn-block" id="confirm-purchase-btn">Confirm request</button>
+    <p id="purchase-total" style="font-weight:500; color:var(--text);"></p>
+    <p style="font-size:.82rem;">We'll review your request. Once it's confirmed you'll be able to pay from this page.</p>
+    <button class="btn btn-primary btn-block" id="confirm-purchase-btn">Send request</button>
     <div class="form-message" id="purchase-message"></div>
+  </div>
+</div>
+
+<!-- Payment modal -->
+<div class="modal-overlay" id="pay-modal">
+  <div class="modal modal-wide">
+    <button class="modal-close" id="pay-close">&times;</button>
+    <h2>Complete your payment</h2>
+    <p id="pay-summary" style="color:var(--text);"></p>
+
+    <div class="pay-tabs" id="pay-tabs">
+      <button type="button" data-tab="upi" class="active">UPI</button>
+      <button type="button" data-tab="qr">QR code</button>
+      <button type="button" data-tab="card">Debit / Credit card</button>
+      <button type="button" data-tab="bank">Bank transfer</button>
+    </div>
+
+    <div class="pay-pane" id="pay-pane-upi"></div>
+    <div class="pay-pane" id="pay-pane-qr" style="display:none;"></div>
+    <div class="pay-pane" id="pay-pane-card" style="display:none;"></div>
+    <div class="pay-pane" id="pay-pane-bank" style="display:none;"></div>
+
+    <hr style="border:none; border-top:1px solid var(--divider); margin:22px 0;">
+
+    <h3 style="font-size:1rem;">Already paid? Tell us here</h3>
+    <p style="font-size:.85rem;">After paying, enter your transaction / UTR / reference number so we can verify it.</p>
+    <div class="field">
+      <label for="pay-method">Payment method used</label>
+      <select id="pay-method">
+        <option>UPI - Google Pay</option>
+        <option>UPI - PhonePe</option>
+        <option>UPI - Paytm</option>
+        <option>UPI - Other app</option>
+        <option>QR code</option>
+        <option>Debit card</option>
+        <option>Credit card</option>
+        <option>Bank transfer</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="pay-utr">Transaction / UTR / reference number</label>
+      <input type="text" id="pay-utr" placeholder="e.g. 412345678901">
+    </div>
+    <button class="btn btn-primary btn-block" id="pay-submit-btn">I have paid — submit</button>
+    <div class="form-message" id="pay-message"></div>
   </div>
 </div>
 
 <script type="module">
 import {
-  auth, db, collection, doc, addDoc, setDoc, getDoc, getDocs, query, orderBy, where,
-  serverTimestamp, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
+  auth, db, collection, doc, addDoc, setDoc, getDoc, getDocs, updateDoc, query, orderBy, where,
+  serverTimestamp, onSnapshot,
+  sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
   onAuthStateChanged, signOut,
   signInWithEmailAndPassword, createUserWithEmailAndPassword
 } from './firebase-init.js';
@@ -140,24 +198,63 @@ const accountArea = document.getElementById('account-area');
 const authModal = document.getElementById('auth-modal');
 const profileModal = document.getElementById('profile-modal');
 const purchaseModal = document.getElementById('purchase-modal');
+const payModal = document.getElementById('pay-modal');
 const ordersPanel = document.getElementById('orders-panel');
 
 let currentUser = null;
 let currentProfile = null;
 let products = [];
 let purchaseTarget = null;
+let ordersCache = [];
+let unsubOrders = null;
+let lastStatus = {};
+let firstSnapshot = true;
+let payOrder = null;
+let paySettings = {};
 
+// ---------- helpers ----------
 function showModal(el) { el.classList.add('open'); }
 function hideModal(el) { el.classList.remove('open'); }
 
 function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  return String(str ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
+
+function fmt(ts) {
+  if (!ts || !ts.toDate) return '—';
+  return ts.toDate().toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true
+  });
+}
+
+function tsSeconds(t) { return t && t.seconds ? t.seconds : 0; }
+
+function orderTotal(o) {
+  return Math.round(Number(o.unitPrice) * Number(o.quantity) * 100) / 100;
+}
+
+function money(n) {
+  return '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function orderRef(o) { return o.id.slice(0, 8).toUpperCase(); }
+
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('visible'), 9000);
+}
+document.getElementById('toast').onclick = () => document.getElementById('toast').classList.remove('visible');
 
 document.getElementById('auth-close').onclick = () => hideModal(authModal);
 document.getElementById('purchase-close').onclick = () => hideModal(purchaseModal);
+document.getElementById('pay-close').onclick = () => hideModal(payModal);
 
-// ---- Toggle between register view and email-link view ----
+// ---------- register / sign-in ----------
 const registerView = document.getElementById('auth-register-view');
 const linkView = document.getElementById('auth-link-view');
 document.getElementById('show-link-view').onclick = (e) => {
@@ -171,7 +268,6 @@ document.getElementById('show-register-view').onclick = (e) => {
   registerView.style.display = 'block';
 };
 
-// ---- Combined register / sign-in (name, email, mobile, password) ----
 document.getElementById('reg-continue-btn').onclick = async () => {
   const name = document.getElementById('reg-name').value.trim();
   const email = document.getElementById('reg-email').value.trim();
@@ -218,7 +314,6 @@ document.getElementById('reg-continue-btn').onclick = async () => {
   }
 };
 
-// ---- Render account area ----
 function renderAccountArea() {
   if (currentUser) {
     const name = currentProfile?.name || currentUser.email;
@@ -233,7 +328,6 @@ function renderAccountArea() {
   }
 }
 
-// ---- Send sign-in link ----
 document.getElementById('send-link-btn').onclick = async () => {
   const email = document.getElementById('auth-email').value.trim();
   const msg = document.getElementById('auth-message');
@@ -254,7 +348,6 @@ document.getElementById('send-link-btn').onclick = async () => {
   }
 };
 
-// ---- Handle returning from the email link ----
 async function checkEmailLinkSignIn() {
   if (isSignInWithEmailLink(auth, window.location.href)) {
     let email = window.localStorage.getItem('emailForSignIn');
@@ -271,7 +364,6 @@ async function checkEmailLinkSignIn() {
   }
 }
 
-// ---- Load / create customer profile ----
 async function loadProfile(user) {
   const ref = doc(db, 'customers', user.uid);
   const snap = await getDoc(ref);
@@ -294,52 +386,113 @@ document.getElementById('save-profile-btn').onclick = async () => {
   currentProfile = { name, mobile, email: currentUser.email };
   hideModal(profileModal);
   renderAccountArea();
-  loadMyOrders();
 };
 
-// ---- My Orders panel (shows status, incl. confirmations) ----
-async function loadMyOrders() {
-  if (!currentUser) { ordersPanel.style.display = 'none'; return; }
+// ---------- live orders (status updates appear instantly) ----------
+function stopWatchingOrders() {
+  if (unsubOrders) { unsubOrders(); unsubOrders = null; }
+  lastStatus = {};
+}
+
+function watchOrders() {
+  stopWatchingOrders();
+  firstSnapshot = true;
   const q = query(collection(db, 'orders'), where('customerUid', '==', currentUser.uid));
-  const snap = await getDocs(q);
-  if (snap.empty) { ordersPanel.style.display = 'none'; return; }
+  unsubOrders = onSnapshot(q, (snap) => {
+    const list = [];
+    snap.forEach(d => list.push({ id: d.id, ...d.data({ serverTimestamps: 'estimate' }) }));
+    list.sort((a, b) => tsSeconds(b.createdAt) - tsSeconds(a.createdAt));
+    ordersCache = list;
 
-  const orders = [];
-  snap.forEach(d => orders.push(d.data()));
-  orders.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    list.forEach(o => {
+      const prev = lastStatus[o.id];
+      if (!firstSnapshot && prev && prev !== o.status) {
+        if (o.status === 'confirmed') showToast(`Your request for "${o.productName}" is confirmed. Tap "Pay now" to pay.`);
+        if (o.status === 'completed') showToast(`Payment verified for "${o.productName}". Your download is ready.`);
+        if (o.status === 'cancelled') showToast(`Your request for "${o.productName}" was cancelled.`);
+      }
+      lastStatus[o.id] = o.status;
+    });
 
-  const statusLabel = { pending: 'Pending', confirmed: 'Confirmed ✓', cancelled: 'Cancelled' };
-  const statusClass = { pending: 'pending', confirmed: 'confirmed', cancelled: 'cancelled' };
+    if (firstSnapshot) {
+      const waiting = list.filter(o => o.status === 'confirmed').length;
+      if (waiting > 0) showToast(`You have ${waiting} confirmed request${waiting > 1 ? 's' : ''} waiting for payment.`);
+    }
+    firstSnapshot = false;
+    renderOrders();
+  }, (err) => console.error('Orders listener error:', err));
+}
 
-  ordersPanel.style.display = 'block';
-  ordersPanel.innerHTML = `
-    <div class="card" style="margin-top:32px;">
-      <h3>Your purchase requests</h3>
-      ${orders.map(o => `
-        <div class="row-between" style="padding:8px 0; border-top:1px solid var(--divider);">
-          <span>${escapeHtml(o.productName)} <span style="color:#5F6B7A;">× ${o.quantity}</span></span>
-          <span class="status-pill ${statusClass[o.status] || 'pending'}">${statusLabel[o.status] || o.status}</span>
+const STATUS_LABEL = {
+  pending: 'Awaiting confirmation',
+  confirmed: 'Confirmed — payment due',
+  payment_submitted: 'Payment under verification',
+  completed: 'Completed',
+  cancelled: 'Cancelled'
+};
+
+function orderCardHtml(o) {
+  const lines = [`<div>Requested: <b>${fmt(o.createdAt)}</b></div>`];
+  if (o.confirmedAt) lines.push(`<div>Confirmed: <b>${fmt(o.confirmedAt)}</b></div>`);
+  if (o.paymentSubmittedAt) lines.push(`<div>Payment submitted: <b>${fmt(o.paymentSubmittedAt)}</b> · ${escapeHtml(o.paymentMethod)} · Ref ${escapeHtml(o.utr)}</div>`);
+  if (o.completedAt) lines.push(`<div>Payment verified: <b>${fmt(o.completedAt)}</b></div>`);
+  if (o.cancelledAt) lines.push(`<div>Cancelled: <b>${fmt(o.cancelledAt)}</b></div>`);
+
+  let action = '';
+  if (o.status === 'pending') action = `<span class="hint">Waiting for confirmation…</span>`;
+  else if (o.status === 'confirmed') action = `<button class="btn btn-primary btn-sm" data-pay="${o.id}">Pay now</button>`;
+  else if (o.status === 'payment_submitted') action = `<span class="hint">Waiting for payment verification…</span>`;
+  else if (o.status === 'completed') action = `<button class="btn btn-primary btn-sm" data-download="${o.id}">Download application</button>`;
+
+  return `
+    <div class="order-card">
+      <div class="row-between">
+        <div>
+          <strong>${escapeHtml(o.productName)}</strong>
+          <span style="color:#5F6B7A;"> × ${o.quantity} · ${money(orderTotal(o))}</span>
+          <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}</div>
         </div>
-      `).join('')}
+        <span class="status-pill ${o.status}">${STATUS_LABEL[o.status] || o.status}</span>
+      </div>
+      <div class="timeline">${lines.join('')}</div>
+      <div style="margin-top:10px;">${action}</div>
     </div>
   `;
 }
 
-// ---- Auth state ----
+function renderOrders() {
+  if (!currentUser || ordersCache.length === 0) {
+    ordersPanel.style.display = 'none';
+    ordersPanel.innerHTML = '';
+    return;
+  }
+  ordersPanel.style.display = 'block';
+  ordersPanel.innerHTML = `
+    <div class="card" style="margin-top:32px;">
+      <h3>Your purchase requests</h3>
+      ${ordersCache.map(orderCardHtml).join('')}
+    </div>
+  `;
+  ordersPanel.querySelectorAll('[data-pay]').forEach(b => b.onclick = () => openPayment(b.dataset.pay));
+  ordersPanel.querySelectorAll('[data-download]').forEach(b => b.onclick = () => downloadFile(b.dataset.download, b));
+}
+
 onAuthStateChanged(auth, async (user) => {
   currentUser = user;
   if (user) {
     hideModal(authModal);
     await loadProfile(user);
-    await loadMyOrders();
+    watchOrders();
   } else {
     currentProfile = null;
-    ordersPanel.style.display = 'none';
+    stopWatchingOrders();
+    ordersCache = [];
+    renderOrders();
   }
   renderAccountArea();
 });
 
-// ---- Load products ----
+// ---------- products ----------
 async function loadProducts() {
   const grid = document.getElementById('product-grid');
   const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
@@ -358,6 +511,7 @@ async function loadProducts() {
       <h3>${escapeHtml(p.name)}</h3>
       <div class="price">₹${Number(p.price).toLocaleString('en-IN')}</div>
       <p class="desc">${escapeHtml(p.description || '')}</p>
+      ${p.hasFile ? `<p style="font-size:.78rem; margin-bottom:10px;">⬇ Digital download after payment</p>` : ''}
       <button class="btn btn-primary btn-block" data-id="${p.id}">Request purchase</button>
     </div>
   `).join('');
@@ -367,7 +521,15 @@ async function loadProducts() {
   });
 }
 
-// ---- Purchase request flow ----
+// ---------- purchase request ----------
+function updatePurchaseTotal() {
+  if (!purchaseTarget) return;
+  const qty = parseInt(document.getElementById('purchase-qty').value, 10) || 1;
+  document.getElementById('purchase-total').textContent =
+    'Total: ' + money(Math.round(Number(purchaseTarget.price) * qty * 100) / 100);
+}
+document.getElementById('purchase-qty').oninput = updatePurchaseTotal;
+
 function openPurchase(productId) {
   if (!currentUser || !currentProfile) {
     showModal(authModal);
@@ -377,6 +539,7 @@ function openPurchase(productId) {
   document.getElementById('purchase-product-name').textContent = 'Request: ' + purchaseTarget.name;
   document.getElementById('purchase-qty').value = 1;
   document.getElementById('purchase-message').className = 'form-message';
+  updatePurchaseTotal();
   showModal(purchaseModal);
 }
 
@@ -392,19 +555,212 @@ document.getElementById('confirm-purchase-btn').onclick = async () => {
       productId: purchaseTarget.id,
       productName: purchaseTarget.name,
       quantity: qty,
+      unitPrice: Number(purchaseTarget.price),
       status: 'pending',
       createdAt: serverTimestamp()
     });
-    msg.textContent = 'Request sent! We will contact you to confirm.';
+    msg.textContent = 'Request sent! You will see the confirmation here.';
     msg.className = 'form-message visible success';
-    setTimeout(() => { hideModal(purchaseModal); loadMyOrders(); }, 1500);
+    setTimeout(() => hideModal(purchaseModal), 1400);
   } catch (err) {
     msg.textContent = err.message;
     msg.className = 'form-message visible error';
   }
 };
 
-// ---- Init ----
+// ---------- payment ----------
+function upiQuery() {
+  const enc = encodeURIComponent;
+  const pa = enc(paySettings.upiId).replace('%40', '@');
+  const pn = enc(paySettings.payeeName || 'Store');
+  const am = orderTotal(payOrder).toFixed(2);
+  const tn = enc('Order ' + orderRef(payOrder));
+  return `pa=${pa}&pn=${pn}&am=${am}&cu=INR&tn=${tn}`;
+}
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  }
+  const old = btn.textContent;
+  btn.textContent = 'Copied ✓';
+  setTimeout(() => btn.textContent = old, 1500);
+}
+
+function renderQr() {
+  const box = document.getElementById('qr-box');
+  if (!box) return;
+  box.innerHTML = '';
+  if (typeof QRCode === 'undefined') {
+    box.textContent = 'QR code could not load. Please use the UPI ID instead.';
+    return;
+  }
+  new QRCode(box, { text: 'upi://pay?' + upiQuery(), width: 200, height: 200 });
+}
+
+function renderPayment() {
+  const total = orderTotal(payOrder);
+  document.getElementById('pay-summary').innerHTML =
+    `<strong>${escapeHtml(payOrder.productName)}</strong> × ${payOrder.quantity} — Amount to pay: <strong>${money(total)}</strong><br><span style="font-size:.78rem; color:#5F6B7A;">Order ${orderRef(payOrder)}</span>`;
+
+  const upiPane = document.getElementById('pay-pane-upi');
+  const qrPane = document.getElementById('pay-pane-qr');
+  const cardPane = document.getElementById('pay-pane-card');
+  const bankPane = document.getElementById('pay-pane-bank');
+
+  if (paySettings.upiId) {
+    const q = upiQuery();
+    const isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const gpay = (isIos ? 'gpay://upi/pay?' : 'tez://upi/pay?') + q;
+    upiPane.innerHTML = `
+      <p>Pay <strong>${money(total)}</strong> to this UPI ID:</p>
+      <div class="upi-id-row">
+        <code id="upi-id-text">${escapeHtml(paySettings.upiId)}</code>
+        <button type="button" class="btn btn-outline btn-sm" id="copy-upi-btn">Copy</button>
+      </div>
+      ${paySettings.payeeName ? `<p style="font-size:.82rem;">Payee name: ${escapeHtml(paySettings.payeeName)}</p>` : ''}
+      <p style="font-size:.82rem;">On a phone, tap your app (the amount is filled in for you):</p>
+      <div class="upi-apps">
+        <a class="btn btn-outline" href="${gpay}">Google Pay</a>
+        <a class="btn btn-outline" href="phonepe://pay?${q}">PhonePe</a>
+        <a class="btn btn-outline" href="paytmmp://pay?${q}">Paytm</a>
+        <a class="btn btn-outline" href="upi://pay?${q}">Other UPI app</a>
+      </div>
+      <p style="font-size:.78rem;">These buttons work on mobile phones. On a computer, use the QR code tab or copy the UPI ID.</p>
+    `;
+    document.getElementById('copy-upi-btn').onclick = (e) => copyText(paySettings.upiId, e.target);
+    qrPane.innerHTML = `
+      <p>Scan with any UPI app (Google Pay, PhonePe, Paytm, BHIM…). The amount <strong>${money(total)}</strong> is included.</p>
+      <div id="qr-box" class="qr-box"></div>
+    `;
+  } else {
+    upiPane.innerHTML = `<p>UPI payment isn't set up yet. Please choose another option or contact us.</p>`;
+    qrPane.innerHTML = `<p>QR payment isn't set up yet.</p>`;
+  }
+
+  if (paySettings.cardPaymentLink) {
+    cardPane.innerHTML = `
+      <p>Pay <strong>${money(total)}</strong> by debit or credit card on our payment provider's secure page.</p>
+      <p style="font-size:.82rem;">We never see or store your card details. After paying, come back here and enter the payment ID below.</p>
+      <a class="btn btn-primary" href="${escapeHtml(paySettings.cardPaymentLink)}" target="_blank" rel="noopener noreferrer">Pay with debit / credit card</a>
+    `;
+  } else {
+    cardPane.innerHTML = `<p>Card payments aren't enabled yet. Please use UPI or bank transfer.</p>`;
+  }
+
+  if (paySettings.bankDetails) {
+    bankPane.innerHTML = `
+      <p>Transfer <strong>${money(total)}</strong> to this account (NEFT / IMPS / RTGS):</p>
+      <pre class="bank-box">${escapeHtml(paySettings.bankDetails)}</pre>
+      <p style="font-size:.78rem;">Use "Order ${orderRef(payOrder)}" as the remark if possible.</p>
+    `;
+  } else {
+    bankPane.innerHTML = `<p>Bank transfer details aren't available yet.</p>`;
+  }
+
+  setPayTab('upi');
+}
+
+function setPayTab(tab) {
+  document.querySelectorAll('#pay-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  ['upi', 'qr', 'card', 'bank'].forEach(t => {
+    document.getElementById('pay-pane-' + t).style.display = (t === tab) ? 'block' : 'none';
+  });
+  if (tab === 'qr' && paySettings.upiId) renderQr();
+}
+document.querySelectorAll('#pay-tabs button').forEach(b => b.onclick = () => setPayTab(b.dataset.tab));
+
+async function openPayment(orderId) {
+  payOrder = ordersCache.find(o => o.id === orderId);
+  if (!payOrder) return;
+  paySettings = {};
+  try {
+    const s = await getDoc(doc(db, 'settings', 'payment'));
+    if (s.exists()) paySettings = s.data();
+  } catch (e) { console.error(e); }
+  document.getElementById('pay-utr').value = '';
+  document.getElementById('pay-message').className = 'form-message';
+  renderPayment();
+  showModal(payModal);
+}
+
+document.getElementById('pay-submit-btn').onclick = async () => {
+  const method = document.getElementById('pay-method').value;
+  const utr = document.getElementById('pay-utr').value.trim();
+  const msg = document.getElementById('pay-message');
+  if (utr.length < 4) {
+    msg.textContent = 'Please enter the transaction / reference number from your payment.';
+    msg.className = 'form-message visible error';
+    return;
+  }
+  try {
+    await updateDoc(doc(db, 'orders', payOrder.id), {
+      status: 'payment_submitted',
+      paymentMethod: method,
+      utr,
+      paymentSubmittedAt: serverTimestamp()
+    });
+    msg.textContent = 'Thank you! We will verify your payment and unlock your download.';
+    msg.className = 'form-message visible success';
+    setTimeout(() => hideModal(payModal), 1600);
+  } catch (err) {
+    msg.textContent = err.message;
+    msg.className = 'form-message visible error';
+  }
+};
+
+// ---------- download (only works after the admin verifies payment) ----------
+async function downloadFile(orderId, btn) {
+  const order = ordersCache.find(o => o.id === orderId);
+  if (!order) return;
+  const oldLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing download…';
+  try {
+    const metaSnap = await getDoc(doc(db, 'product_files', order.productId));
+    if (!metaSnap.exists()) {
+      showToast('The file is not available yet. Please contact us.');
+      return;
+    }
+    const meta = metaSnap.data();
+    if (meta.ready === false) {
+      showToast('The file is being updated. Please try again in a minute.');
+      return;
+    }
+    if (meta.externalUrl) {
+      window.open(meta.externalUrl, '_blank', 'noopener');
+      return;
+    }
+    const chunkSnap = await getDocs(query(collection(db, 'product_files', order.productId, 'chunks'), orderBy('index')));
+    const parts = [];
+    chunkSnap.forEach(d => parts.push(d.data().data.toUint8Array()));
+    if (parts.length !== meta.chunkCount) {
+      showToast('The download is incomplete. Please try again or contact us.');
+      return;
+    }
+    const blob = new Blob(parts, { type: meta.mimeType || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = meta.fileName || 'application';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) {
+    console.error(err);
+    showToast('Download failed: ' + (err.code === 'permission-denied' ? 'access has not been granted yet.' : err.message));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
+  }
+}
+
+// ---------- init ----------
 checkEmailLinkSignIn().then(loadProducts);
 </script>
 </body>
