@@ -39,6 +39,8 @@
 
 <main class="container">
   <div id="orders-panel" style="display:none;"></div>
+  <div class="search-row"><input type="search" class="search-input" id="product-search" placeholder="Search products…" aria-label="Search products"></div>
+  <div class="cat-tabs" id="cat-tabs" role="tablist" aria-label="Product categories" style="display:none;"></div>
   <div id="product-grid" class="product-grid">
     <p style="grid-column: 1/-1; text-align:center; color:#5F6B7A;">Loading products…</p>
   </div>
@@ -401,7 +403,7 @@ function watchOrders() {
   const q = query(collection(db, 'orders'), where('customerUid', '==', currentUser.uid));
   unsubOrders = onSnapshot(q, (snap) => {
     const list = [];
-    snap.forEach(d => list.push({ id: d.id, ...d.data({ serverTimestamps: 'estimate' }) }));
+    snap.forEach(d => { const o = { id: d.id, ...d.data({ serverTimestamps: 'estimate' }) }; if (!o.binned) list.push(o); });
     list.sort((a, b) => tsSeconds(b.createdAt) - tsSeconds(a.createdAt));
     ordersCache = list;
 
@@ -497,21 +499,79 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 // ---------- products ----------
-async function loadProducts() {
-  const grid = document.getElementById('product-grid');
-  const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
-  const snap = await getDocs(q);
-  products = [];
-  snap.forEach(d => { const p = { id: d.id, ...d.data() }; if (!p.hidden) products.push(p); });
+let activeCategory = 'all';
 
-  if (products.length === 0) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No products listed yet. Check back soon.</div>`;
+function categoryKey(p) { return (p.category || '').trim().toLowerCase() || '__other'; }
+function categoryLabel(p) { return (p.category || '').trim() || 'Other'; }
+
+let searchTerm = '';
+
+function matchesQuery(hay, q) {
+  const terms = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const h = String(hay || '').toLowerCase();
+  return terms.every(t => h.includes(t));
+}
+function productHay(p) { return [p.name, p.category, p.description, p.price].join(' '); }
+function visibleProducts() { return products.filter(p => matchesQuery(productHay(p), searchTerm)); }
+
+function buildGroups(list) {
+  const map = new Map();
+  list.forEach(p => {
+    const key = categoryKey(p);
+    if (!map.has(key)) map.set(key, { key, label: categoryLabel(p), count: 0 });
+    map.get(key).count++;
+  });
+  return [...map.values()].sort((a, b) => {
+    if (a.key === '__other') return 1;
+    if (b.key === '__other') return -1;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function renderTabs() {
+  const wrap = document.getElementById('cat-tabs');
+  const list = visibleProducts();
+  const groups = buildGroups(list);
+  // Tabs only make sense when there are at least two purposes to choose between
+  if (groups.length < 2) {
+    wrap.style.display = 'none';
+    activeCategory = 'all';
+    return;
+  }
+  if (activeCategory !== 'all' && !groups.some(g => g.key === activeCategory)) activeCategory = 'all';
+
+  const tab = (key, label, count) =>
+    `<button type="button" role="tab" aria-selected="${key === activeCategory}" class="${key === activeCategory ? 'active' : ''}" data-cat="${escapeHtml(key)}">${escapeHtml(label)}<span class="count">${count}</span></button>`;
+
+  wrap.style.display = 'flex';
+  wrap.innerHTML = tab('all', 'All', list.length) + groups.map(g => tab(g.key, g.label, g.count)).join('');
+  wrap.querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      activeCategory = b.dataset.cat;
+      renderTabs();
+      renderProducts();
+    };
+  });
+}
+
+function renderProducts() {
+  const grid = document.getElementById('product-grid');
+  const base = visibleProducts();
+  const list = activeCategory === 'all' ? base : base.filter(p => categoryKey(p) === activeCategory);
+
+  if (list.length === 0) {
+    const term = searchTerm.trim();
+    const text = products.length === 0
+      ? 'No products listed yet. Check back soon.'
+      : (term ? `No products match "${escapeHtml(term)}".` : 'No products in this category yet.');
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">${text}</div>`;
     return;
   }
 
-  grid.innerHTML = products.map(p => `
+  grid.innerHTML = list.map(p => `
     <div class="product-card">
-      ${p.category ? `<span class="category-tag">${escapeHtml(p.category)}</span>` : ''}
+      ${activeCategory === 'all' && p.category ? `<span class="category-tag">${escapeHtml(p.category)}</span>` : ''}
       <h3>${escapeHtml(p.name)}</h3>
       <div class="price">₹${Number(p.price).toLocaleString('en-IN')}</div>
       <p class="desc">${escapeHtml(p.description || '')}</p>
@@ -523,6 +583,21 @@ async function loadProducts() {
   grid.querySelectorAll('button[data-id]').forEach(btn => {
     btn.onclick = () => openPurchase(btn.dataset.id);
   });
+}
+
+document.getElementById('product-search').oninput = (e) => {
+  searchTerm = e.target.value;
+  renderTabs();
+  renderProducts();
+};
+
+async function loadProducts() {
+  const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  products = [];
+  snap.forEach(d => { const p = { id: d.id, ...d.data() }; if (!p.hidden && !p.binned) products.push(p); });
+  renderTabs();
+  renderProducts();
 }
 
 // ---------- purchase request ----------
