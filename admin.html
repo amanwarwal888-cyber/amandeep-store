@@ -43,14 +43,20 @@
     <button class="tab-btn" data-tab="products">Products</button>
     <button class="tab-btn" data-tab="payment">Payment Settings</button>
     <button class="tab-btn" data-tab="content">Site Content</button>
+    <button class="tab-btn" data-tab="bin">Bin <span class="badge muted" id="bin-badge" style="display:none;"></span></button>
   </aside>
 
   <main class="admin-main">
 
     <!-- Orders tab -->
     <section id="tab-orders">
-      <h2>Purchase requests</h2>
+      <div class="row-between">
+        <h2 style="margin:0;">Purchase requests</h2>
+        <button class="btn btn-remove btn-sm" id="clear-cancelled-btn" style="display:none;">Move all cancelled to bin</button>
+      </div>
       <p style="font-size:.86rem;">New requests appear here automatically. Flow: <strong>Confirm request</strong> → customer pays → <strong>Verify payment</strong> (check the UTR in your bank/UPI app first) → customer can download.</p>
+      <input type="search" class="search-input" id="order-search" placeholder="Search orders: customer, mobile, email, product, order no. or UTR…" aria-label="Search orders" style="margin-top:14px;">
+      <div class="cat-tabs" id="order-tabs" style="display:none; padding-top:12px;"></div>
       <div id="orders-list"></div>
     </section>
 
@@ -66,7 +72,12 @@
         <input type="hidden" id="product-id">
         <div class="field"><label>Name</label><input type="text" id="p-name"></div>
         <div class="field"><label>Price (₹)</label><input type="number" id="p-price" min="0" step="0.01"></div>
-        <div class="field"><label>Category</label><input type="text" id="p-category" placeholder="e.g. Software"></div>
+        <div class="field">
+          <label>Category / purpose</label>
+          <input type="text" id="p-category" list="category-list" placeholder="e.g. Attendance, Canteen, Billing">
+          <datalist id="category-list"></datalist>
+          <p style="font-size:.78rem; margin-top:4px;">The store shows one tab for each category. Use exactly the same name for products with the same purpose. Products with no category go under "Other".</p>
+        </div>
         <div class="field"><label>Description</label><textarea id="p-description"></textarea></div>
         <div class="field">
           <label style="display:flex; gap:8px; align-items:flex-start; font-weight:400;">
@@ -125,10 +136,27 @@
         <p style="font-size:.78rem; margin-top:12px;">Customers only get access after you verify their payment. A pasted link is hidden from everyone else, but anyone who receives it could share it — for stronger control, upload the file directly.</p>
       </div>
 
+      <input type="search" class="search-input" id="product-search" placeholder="Search products: name, category or description…" aria-label="Search products" style="margin-top:16px;">
+      <div class="cat-tabs" id="product-tabs" style="display:none; padding-top:12px;"></div>
+
       <table class="admin-table" id="products-table">
         <thead><tr><th>Name</th><th>Price</th><th>File</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <!-- Bin tab -->
+    <section id="tab-bin" style="display:none;">
+      <div class="row-between">
+        <h2 style="margin:0;">Bin</h2>
+        <button class="btn btn-remove btn-sm" id="empty-bin-btn" style="display:none;">Empty bin</button>
+      </div>
+      <p style="font-size:.86rem;">Orders and products you remove wait here. Nothing is deleted automatically — you can restore an item, or delete it forever.</p>
+      <input type="search" class="search-input" id="bin-search" placeholder="Search the bin…" aria-label="Search the bin" style="margin-top:6px;">
+      <h3 style="margin-top:24px;">Orders</h3>
+      <div id="bin-orders"></div>
+      <h3 style="margin-top:24px;">Products</h3>
+      <div id="bin-products"></div>
     </section>
 
     <!-- Payment settings tab -->
@@ -203,6 +231,8 @@ let ordersCache = [];
 let unsubOrders = null;
 let productsCache = [];
 let fileProductId = null;
+let productCat = 'all';
+let orderCat = 'all';
 
 // ---------- helpers ----------
 function escapeHtml(str) {
@@ -220,6 +250,61 @@ function money(n) { return '₹' + Number(n).toLocaleString('en-IN', { minimumFr
 function orderRef(o) { return o.id.slice(0, 8).toUpperCase(); }
 function hasPrice(o) { return typeof o.unitPrice === 'number' && Number.isFinite(o.unitPrice); }
 function priceLabel(o) { return hasPrice(o) ? money(orderTotal(o)) : 'price not recorded'; }
+// ---------- purpose (category) tabs ----------
+function categoryKey(cat) { return (cat || '').trim().toLowerCase() || '__other'; }
+function categoryLabel(cat) { return (cat || '').trim() || 'Other'; }
+
+function groupCounts(items, getCat) {
+  const map = new Map();
+  items.forEach(it => {
+    const c = getCat(it);
+    const key = categoryKey(c);
+    if (!map.has(key)) map.set(key, { key, label: categoryLabel(c), count: 0 });
+    map.get(key).count++;
+  });
+  return [...map.values()].sort((x, y) => {
+    if (x.key === '__other') return 1;
+    if (y.key === '__other') return -1;
+    return x.label.localeCompare(y.label);
+  });
+}
+
+// Draws the tab row and returns the tab that is active (falls back to 'all')
+function renderTabsInto(wrapId, groups, total, active, onPick) {
+  const wrap = document.getElementById(wrapId);
+  if (groups.length < 2) { wrap.style.display = 'none'; return 'all'; }
+  let cur = active;
+  if (cur !== 'all' && !groups.some(g => g.key === cur)) cur = 'all';
+  const tab = (key, label, count) =>
+    `<button type="button" role="tab" aria-selected="${key === cur}" class="${key === cur ? 'active' : ''}" data-cat="${escapeHtml(key)}">${escapeHtml(label)}<span class="count">${count}</span></button>`;
+  wrap.style.display = 'flex';
+  wrap.innerHTML = tab('all', 'All', total) + groups.map(g => tab(g.key, g.label, g.count)).join('');
+  wrap.querySelectorAll('button').forEach(b => b.onclick = () => onPick(b.dataset.cat));
+  return cur;
+}
+
+// An order's purpose comes from its product's category
+function orderCategory(o) {
+  const p = productsCache.find(x => x.id === o.productId);
+  return p ? p.category : '';
+}
+
+function hasOtherCompleted(o) {
+  return ordersCache.some(x => x.id !== o.id && x.customerUid === o.customerUid && x.productId === o.productId && x.status === 'completed' && !x.binned);
+}
+
+// ---------- search ----------
+function matchesQuery(hay, q) {
+  const terms = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const h = String(hay || '').toLowerCase();
+  return terms.every(t => h.includes(t));
+}
+function orderHay(o) {
+  return [o.customerName, o.customerEmail, o.customerMobile, o.productName, orderRef(o), o.utr, o.paymentMethod, STATUS_LABEL[o.status], String(o.status || '').replace(/_/g, ' '), orderCategory(o)].join(' ');
+}
+function productHay(p) { return [p.name, p.category, p.description, p.price].join(' '); }
+
 function resetProductFileFields(hint) {
   document.getElementById('p-file').value = '';
   document.getElementById('p-fileurl').value = '';
@@ -273,6 +358,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.dataset.tab === 'content') loadContent();
     if (btn.dataset.tab === 'payment') loadPayment();
     if (btn.dataset.tab === 'products') loadProducts();
+    if (btn.dataset.tab === 'bin') renderBin();
   };
 });
 
@@ -313,7 +399,7 @@ const STATUS_LABEL = {
   cancelled: 'Cancelled'
 };
 
-function orderActions(o) {
+function orderMainActions(o) {
   const b = (act, label, cls) => `<button class="btn ${cls} btn-sm" data-act="${act}" data-id="${o.id}">${label}</button>`;
   if (o.status === 'pending') return b('confirm', 'Confirm request', 'btn-primary') + ' ' + b('cancel', 'Cancel', 'btn-danger');
   if (o.status === 'confirmed') return b('complete', 'Mark payment received', 'btn-primary') + ' ' + b('cancel', 'Cancel', 'btn-danger');
@@ -322,19 +408,43 @@ function orderActions(o) {
   return '';
 }
 
+function orderActions(o) {
+  const main = orderMainActions(o);
+  const remove = `<button class="btn btn-remove btn-sm" data-act="bin" data-id="${o.id}">Move to bin</button>`;
+  return main ? main + ' ' + remove : remove;
+}
+
 function renderOrders() {
   const list = document.getElementById('orders-list');
-  const pending = ordersCache.filter(o => o.status === 'pending' || o.status === 'payment_submitted').length;
+  const activeOrders = ordersCache.filter(o => !o.binned);
+  const pending = activeOrders.filter(o => o.status === 'pending' || o.status === 'payment_submitted').length;
   const badge = document.getElementById('pending-badge');
   badge.style.display = pending ? 'inline-block' : 'none';
   badge.textContent = pending;
 
-  if (ordersCache.length === 0) {
+  const cancelledCount = activeOrders.filter(o => o.status === 'cancelled').length;
+  const clearBtn = document.getElementById('clear-cancelled-btn');
+  clearBtn.style.display = cancelledCount ? 'inline-flex' : 'none';
+  clearBtn.textContent = `Move all cancelled to bin (${cancelledCount})`;
+
+  if (activeOrders.length === 0) {
+    document.getElementById('order-tabs').style.display = 'none';
     list.innerHTML = `<div class="empty-state">No purchase requests yet.</div>`;
     return;
   }
 
-  list.innerHTML = ordersCache.map(o => {
+  const term = document.getElementById('order-search').value;
+  const matches = activeOrders.filter(o => matchesQuery(orderHay(o), term));
+  const groups = groupCounts(matches, orderCategory);
+  orderCat = renderTabsInto('order-tabs', groups, matches.length, orderCat, (k) => { orderCat = k; renderOrders(); });
+  const visible = orderCat === 'all' ? matches : matches.filter(o => categoryKey(orderCategory(o)) === orderCat);
+
+  if (visible.length === 0) {
+    list.innerHTML = `<div class="empty-state">${term.trim() ? 'No orders match your search.' : 'No orders in this category yet.'}</div>`;
+    return;
+  }
+
+  list.innerHTML = visible.map(o => {
     const lines = [`<div>Requested: <b>${fmt(o.createdAt)}</b></div>`];
     if (o.confirmedAt) lines.push(`<div>Confirmed: <b>${fmt(o.confirmedAt)}</b></div>`);
     else if (['confirmed', 'payment_submitted', 'completed'].includes(o.status)) lines.push(`<div>Confirmed: <b>time not recorded</b></div>`);
@@ -348,7 +458,7 @@ function renderOrders() {
           <div>
             <strong>${escapeHtml(o.productName)}</strong> × ${o.quantity}
             <span style="color:#5F6B7A;"> · ${priceLabel(o)}</span>
-            <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}</div>
+            <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}${orderCategory(o) ? ' · ' + escapeHtml(orderCategory(o)) : ''}</div>
           </div>
           <span class="status-pill ${o.status}">${STATUS_LABEL[o.status] || o.status}</span>
         </div>
@@ -371,6 +481,7 @@ function watchOrders() {
     ordersCache = [];
     snap.forEach(d => ordersCache.push({ id: d.id, ...d.data({ serverTimestamps: 'estimate' }) }));
     renderOrders();
+    renderBin();
   }, (err) => console.error('Orders listener error:', err));
 }
 
@@ -394,6 +505,17 @@ document.getElementById('orders-list').onclick = async (e) => {
       batch.update(orderRefDoc, { status: 'completed', completedAt: serverTimestamp() });
       batch.set(entRef, { customerUid: o.customerUid, productId: o.productId, orderId: o.id, grantedAt: serverTimestamp() });
       await batch.commit();
+    } else if (act === 'bin') {
+      const keepsAccess = hasOtherCompleted(o);
+      let text = 'Move this order to the bin?\n\nIt disappears from the customer\'s page. You can restore it any time from the Bin tab.';
+      if (o.status === 'completed' && !keepsAccess) {
+        text += '\n\nThe customer will lose download access to this product until you restore the order.';
+      }
+      if (!confirm(text)) { btn.disabled = false; return; }
+      const batch = writeBatch(db);
+      batch.update(orderRefDoc, { binned: true, binnedAt: serverTimestamp() });
+      if (o.status === 'completed' && !keepsAccess) batch.delete(entRef);
+      await batch.commit();
     } else if (act === 'fixprice') {
       const p = productsCache.find(x => x.id === o.productId);
       if (!p) { alert('The product for this order no longer exists, so its price cannot be filled in. Please cancel this order.'); btn.disabled = false; return; }
@@ -403,7 +525,7 @@ document.getElementById('orders-list').onclick = async (e) => {
       if (!confirm('Cancel this request? If the customer already has download access, it will be revoked.')) { btn.disabled = false; return; }
       const batch = writeBatch(db);
       batch.update(orderRefDoc, { status: 'cancelled', cancelledAt: serverTimestamp() });
-      batch.delete(entRef);
+      if (!hasOtherCompleted(o)) batch.delete(entRef);
       await batch.commit();
     }
   } catch (err) {
@@ -412,17 +534,36 @@ document.getElementById('orders-list').onclick = async (e) => {
   }
 };
 
+document.getElementById('clear-cancelled-btn').onclick = async () => {
+  const cancelled = ordersCache.filter(o => o.status === 'cancelled' && !o.binned);
+  if (!cancelled.length) return;
+  if (!confirm(`Move all ${cancelled.length} cancelled order(s) to the bin? You can restore them from the Bin tab.`)) return;
+  try {
+    let batch = writeBatch(db);
+    let n = 0;
+    for (const o of cancelled) {
+      batch.update(doc(db, 'orders', o.id), { binned: true, binnedAt: serverTimestamp() });
+      n++;
+      if (n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+    }
+    if (n > 0) await batch.commit();
+  } catch (err) { alert(err.message); }
+};
+
 // =====================================================================
 // PRODUCTS + FILES
 // =====================================================================
-async function loadProducts() {
+function renderProductsTable() {
   const tbody = document.querySelector('#products-table tbody');
-  const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
-  const snap = await getDocs(q);
-  productsCache = [];
-  snap.forEach(d => productsCache.push({ id: d.id, ...d.data() }));
+  const active = productsCache.filter(p => !p.binned);
+  const term = document.getElementById('product-search').value;
+  const matches = active.filter(p => matchesQuery(productHay(p), term));
+  const groups = groupCounts(matches, p => p.category);
+  productCat = renderTabsInto('product-tabs', groups, matches.length, productCat, (k) => { productCat = k; renderProductsTable(); });
+  const list = productCat === 'all' ? matches : matches.filter(p => categoryKey(p.category) === productCat);
+
   tbody.innerHTML = '';
-  productsCache.forEach(p => {
+  list.forEach(p => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(p.name)}${p.hidden ? ' <span class="status-pill cancelled">Hidden</span>' : ''}<div style="font-size:.76rem;color:#5F6B7A;">${escapeHtml(p.category || '')}</div></td>
@@ -432,14 +573,27 @@ async function loadProducts() {
         <button class="btn btn-outline btn-sm" data-edit="${p.id}">Edit</button>
         <button class="btn btn-outline btn-sm" data-file="${p.id}">File</button>
         <button class="btn btn-outline btn-sm" data-toggle="${p.id}">${p.hidden ? 'Show' : 'Hide'}</button>
-        <button class="btn btn-danger btn-sm" data-delete="${p.id}">Delete</button>
+        <button class="btn btn-remove btn-sm" data-bin="${p.id}">Move to bin</button>
       </td>`;
     tbody.appendChild(tr);
   });
+  if (list.length === 0) tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#5F6B7A; padding:24px;">${term.trim() ? 'No products match your search.' : 'No products found.'}</td></tr>`;
   tbody.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editProduct(b.dataset.edit));
   tbody.querySelectorAll('[data-file]').forEach(b => b.onclick = () => openFilePanel(b.dataset.file));
   tbody.querySelectorAll('[data-toggle]').forEach(b => b.onclick = () => toggleHidden(b.dataset.toggle));
-  tbody.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => deleteProduct(b.dataset.delete));
+  tbody.querySelectorAll('[data-bin]').forEach(b => b.onclick = () => binProduct(b.dataset.bin));
+}
+
+async function loadProducts() {
+  const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
+  const snap = await getDocs(q);
+  productsCache = [];
+  snap.forEach(d => productsCache.push({ id: d.id, ...d.data() }));
+  const cats = [...new Set(productsCache.filter(p => !p.binned).map(p => (p.category || '').trim()).filter(Boolean))].sort((x, y) => x.localeCompare(y));
+  document.getElementById('category-list').innerHTML = cats.map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  renderProductsTable();
+  renderOrders();   // order tabs depend on product categories
+  renderBin();
 }
 
 document.getElementById('new-product-btn').onclick = () => {
@@ -554,12 +708,13 @@ async function toggleHidden(id) {
   } catch (err) { alert(err.message); }
 }
 
-async function deleteProduct(id) {
-  if (!confirm('Delete this product?\n\nIts file will be removed too, so people who already bought it will NO LONGER be able to download it.\n\nTo stop selling it but keep buyers\' downloads working, click Cancel and use "Hide" instead.')) return;
+async function binProduct(id) {
+  const p = productsCache.find(x => x.id === id);
+  if (!p) return;
+  if (!confirm(`Move "${p.name}" to the bin?\n\nIt disappears from the store, but people who already bought it can still download it. You can restore it from the Bin tab.`)) return;
   try {
-    await deleteFileData(id);
-    await deleteDoc(doc(db, 'products', id));
-    loadProducts();
+    await updateDoc(doc(db, 'products', id), { binned: true, binnedAt: serverTimestamp(), wasHidden: !!p.hidden, hidden: true });
+    await loadProducts();
   } catch (err) { alert(err.message); }
 }
 
@@ -714,6 +869,133 @@ document.getElementById('file-remove-btn').onclick = async () => {
     await refreshFileInfo();
     loadProducts();
   } catch (err) { setMsg(msg, err.message, 'error'); }
+};
+
+// =====================================================================
+// BIN — removed items wait here until you delete them for good
+// =====================================================================
+function renderBin() {
+  const term = document.getElementById('bin-search').value;
+  const byNewest = (x, y) => ((y.binnedAt && y.binnedAt.seconds) || 0) - ((x.binnedAt && x.binnedAt.seconds) || 0);
+  const binOrders = ordersCache.filter(o => o.binned).sort(byNewest);
+  const binProducts = productsCache.filter(p => p.binned).sort(byNewest);
+  const total = binOrders.length + binProducts.length;
+
+  const badge = document.getElementById('bin-badge');
+  badge.style.display = total ? 'inline-block' : 'none';
+  badge.textContent = total;
+  document.getElementById('empty-bin-btn').style.display = total ? 'inline-flex' : 'none';
+
+  const shownOrders = binOrders.filter(o => matchesQuery(orderHay(o), term));
+  document.getElementById('bin-orders').innerHTML = shownOrders.length ? shownOrders.map(o => `
+    <div class="card">
+      <div class="row-between">
+        <div>
+          <strong>${escapeHtml(o.productName)}</strong> × ${o.quantity}
+          <span style="color:#5F6B7A;"> · ${priceLabel(o)}</span>
+          <div style="font-size:.76rem; color:#5F6B7A;">Order ${orderRef(o)}</div>
+        </div>
+        <span class="status-pill ${o.status}">${STATUS_LABEL[o.status] || o.status}</span>
+      </div>
+      <div style="margin-top:8px; font-size:.86rem;">${escapeHtml(o.customerName)} · ${escapeHtml(o.customerMobile)} · ${escapeHtml(o.customerEmail)}</div>
+      <div class="timeline">
+        <div>Requested: <b>${fmt(o.createdAt)}</b></div>
+        <div>Moved to bin: <b>${fmt(o.binnedAt)}</b></div>
+        ${o.status === 'completed' ? '<div>Restoring this order gives the customer their download access back.</div>' : ''}
+      </div>
+      <div style="margin-top:12px;">
+        <button class="btn btn-primary btn-sm" data-bin-act="restore-order" data-id="${o.id}">Restore</button>
+        <button class="btn btn-remove btn-sm" data-bin-act="delete-order" data-id="${o.id}">Delete forever</button>
+      </div>
+    </div>`).join('')
+    : `<p class="hint">${binOrders.length ? 'No orders match your search.' : 'No orders in the bin.'}</p>`;
+
+  const shownProducts = binProducts.filter(p => matchesQuery(productHay(p), term));
+  document.getElementById('bin-products').innerHTML = shownProducts.length ? shownProducts.map(p => `
+    <div class="card">
+      <div>
+        <strong>${escapeHtml(p.name)}</strong>
+        <span style="color:#5F6B7A;"> · ₹${Number(p.price).toLocaleString('en-IN')}</span>
+        <div style="font-size:.76rem; color:#5F6B7A;">${escapeHtml(p.category || 'Other')} · ${p.hasFile ? 'file attached' : 'no file'}</div>
+      </div>
+      <div class="timeline">
+        <div>Moved to bin: <b>${fmt(p.binnedAt)}</b></div>
+        <div>People who already bought it can still download it until you delete it forever.</div>
+      </div>
+      <div style="margin-top:12px;">
+        <button class="btn btn-primary btn-sm" data-bin-act="restore-product" data-id="${p.id}">Restore</button>
+        <button class="btn btn-remove btn-sm" data-bin-act="delete-product" data-id="${p.id}">Delete forever</button>
+      </div>
+    </div>`).join('')
+    : `<p class="hint">${binProducts.length ? 'No products match your search.' : 'No products in the bin.'}</p>`;
+}
+
+document.getElementById('order-search').oninput = () => renderOrders();
+document.getElementById('product-search').oninput = () => renderProductsTable();
+document.getElementById('bin-search').oninput = () => renderBin();
+
+document.getElementById('tab-bin').onclick = async (e) => {
+  const btn = e.target.closest('button[data-bin-act]');
+  if (!btn) return;
+  const act = btn.dataset.binAct;
+  const id = btn.dataset.id;
+  try {
+    btn.disabled = true;
+    if (act === 'restore-order') {
+      const o = ordersCache.find(x => x.id === id);
+      if (!o) return;
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'orders', id), { binned: false, binnedAt: null });
+      if (o.status === 'completed') {
+        batch.set(doc(db, 'entitlements', `${o.customerUid}_${o.productId}`), {
+          customerUid: o.customerUid, productId: o.productId, orderId: o.id, grantedAt: serverTimestamp()
+        });
+      }
+      await batch.commit();
+    } else if (act === 'delete-order') {
+      if (!confirm('Delete this order forever?\n\nThis cannot be undone.')) { btn.disabled = false; return; }
+      await deleteDoc(doc(db, 'orders', id));
+    } else if (act === 'restore-product') {
+      const p = productsCache.find(x => x.id === id);
+      if (!p) return;
+      await updateDoc(doc(db, 'products', id), { binned: false, binnedAt: null, hidden: !!p.wasHidden, wasHidden: false });
+      await loadProducts();
+    } else if (act === 'delete-product') {
+      const p = productsCache.find(x => x.id === id);
+      if (!confirm(`Delete "${p ? p.name : 'this product'}" forever?\n\nIts file will be deleted too, so people who already bought it will NO LONGER be able to download it.\n\nThis cannot be undone.`)) { btn.disabled = false; return; }
+      await deleteFileData(id);
+      await deleteDoc(doc(db, 'products', id));
+      await loadProducts();
+    }
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+};
+
+document.getElementById('empty-bin-btn').onclick = async () => {
+  const binOrders = ordersCache.filter(o => o.binned);
+  const binProducts = productsCache.filter(p => p.binned);
+  if (!binOrders.length && !binProducts.length) return;
+  if (!confirm(`Delete everything in the bin forever?\n\n${binOrders.length} order(s) and ${binProducts.length} product(s) (with their files) will be permanently deleted.\n\nThis cannot be undone.`)) return;
+  const btn = document.getElementById('empty-bin-btn');
+  btn.disabled = true;
+  try {
+    let batch = writeBatch(db);
+    let n = 0;
+    for (const o of binOrders) {
+      batch.delete(doc(db, 'orders', o.id));
+      n++;
+      if (n === 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+    }
+    if (n > 0) await batch.commit();
+    for (const p of binProducts) {
+      await deleteFileData(p.id);
+      await deleteDoc(doc(db, 'products', p.id));
+    }
+    await loadProducts();
+  } catch (err) { alert(err.message); }
+  finally { btn.disabled = false; }
 };
 
 // =====================================================================
